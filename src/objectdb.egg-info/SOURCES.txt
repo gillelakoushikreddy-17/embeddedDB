@@ -23,8 +23,12 @@ tests/test_allocate_page.py
 tests/test_btree.py
 tests/test_btree_leaf_page.py
 tests/test_btree_page.py
+tests/test_btree_randomized.py
+tests/test_concurrency_lock.py
 tests/test_crash_recovery_scenarios.py
 tests/test_database.py
+tests/test_durability_ordering.py
+tests/test_integrity_and_backup.py
 tests/test_internal_rebalancing.py
 tests/test_objectdb_api.py
 tests/test_objectdb_persistence.py
