@@ -1,0 +1,13 @@
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "objectdb"
+version = "0.1.0"
+description = "An experimental embedded object storage database engine"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]

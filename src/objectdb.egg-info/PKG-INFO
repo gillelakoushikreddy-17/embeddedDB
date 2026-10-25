@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: objectdb
+Version: 0.1.0
+Summary: An experimental embedded object storage database engine
+Requires-Python: >=3.10

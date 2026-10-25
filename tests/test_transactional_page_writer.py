@@ -1,0 +1,211 @@
+
+import base64
+
+import pytest
+
+from objectdb.page_manager import PageManager, PAGE_SIZE
+from objectdb.wal import WriteAheadLog
+from objectdb.transactional_page_writer import TransactionalPageWriter
+
+
+def setup_database(tmp_path):
+    db_path = tmp_path / "test.db"
+    wal_path = tmp_path / "test.wal"
+
+    manager = PageManager(db_path)
+    manager.initialize()
+    manager.open()
+
+    page_id = manager.allocate_page()
+
+    wal = WriteAheadLog(wal_path)
+    wal.open()
+
+    writer = TransactionalPageWriter(manager, wal)
+
+    return manager, wal, writer, page_id
+
+
+def test_write_page_logs_before_image(tmp_path):
+    manager, wal, writer, page_id = setup_database(tmp_path)
+
+    try:
+        original = b"A" * PAGE_SIZE
+        updated = b"B" * PAGE_SIZE
+
+        manager.write_page(page_id, original)
+        writer.write_page(1, page_id, updated)
+
+        assert manager.read_page(page_id) == updated
+
+        records = wal.read_all()
+        before_image = records[-1]
+
+        assert before_image["type"] == "PAGE_BEFORE_IMAGE"
+        assert before_image["data"]["transaction_id"] == 1
+        assert before_image["data"]["page_id"] == page_id
+
+        decoded = base64.b64decode(
+            before_image["data"]["original_data"]
+        )
+
+        assert decoded == original
+
+    finally:
+        wal.close()
+        manager.close()
+
+
+def test_restore_page_restores_original_data(tmp_path):
+    manager, wal, writer, page_id = setup_database(tmp_path)
+
+    try:
+        original = b"A" * PAGE_SIZE
+        updated = b"B" * PAGE_SIZE
+
+        manager.write_page(page_id, original)
+        writer.write_page(1, page_id, updated)
+
+        records = wal.read_all()
+        encoded_original = records[-1]["data"]["original_data"]
+
+        writer.restore_page(page_id, encoded_original)
+
+        assert manager.read_page(page_id) == original
+
+    finally:
+        wal.close()
+        manager.close()
+
+
+def test_invalid_page_size_is_rejected(tmp_path):
+    manager, wal, writer, page_id = setup_database(tmp_path)
+
+    try:
+        with pytest.raises(ValueError):
+            writer.write_page(1, page_id, b"too short")
+
+    finally:
+        wal.close()
+        manager.close()
+
+
+def test_header_page_cannot_be_written(tmp_path):
+    manager, wal, writer, _ = setup_database(tmp_path)
+
+    try:
+        with pytest.raises(ValueError):
+            writer.write_page(1, 0, b"B" * PAGE_SIZE)
+
+    finally:
+        wal.close()
+        manager.close()
+
+def test_allocate_page_records_allocation_in_wal(
+    tmp_path,
+):
+    from objectdb.page_manager import PageManager
+    from objectdb.wal import WriteAheadLog
+    from objectdb.transactional_page_writer import (
+        TransactionalPageWriter,
+    )
+
+    db_path = tmp_path / "test.db"
+    wal_path = tmp_path / "test.wal"
+
+    manager = PageManager(db_path)
+    manager.initialize()
+    manager.open()
+
+    wal = WriteAheadLog(wal_path)
+    wal.open()
+
+    try:
+        page_writer = TransactionalPageWriter(manager, wal)
+
+        page_id = manager.allocate_page()
+
+        wal.append(
+            "PAGE_ALLOCATED",
+            {
+                "transaction_id": 1,
+                "page_id": page_id,
+            },
+        )
+
+        records = wal.read_all()
+
+        assert records[-1]["type"] == "PAGE_ALLOCATED"
+        assert records[-1]["data"]["transaction_id"] == 1
+        assert records[-1]["data"]["page_id"] == page_id
+
+    finally:
+        wal.close()
+        manager.close()
+
+def test_allocate_page_records_allocation_in_wal(tmp_path):
+    from objectdb.page_manager import PageManager
+    from objectdb.wal import WriteAheadLog
+    from objectdb.transactional_page_writer import (
+        TransactionalPageWriter,
+    )
+
+    db_path = tmp_path / "test.db"
+    wal_path = tmp_path / "test.wal"
+
+    manager = PageManager(db_path)
+    manager.initialize()
+    manager.open()
+
+    wal = WriteAheadLog(wal_path)
+    wal.open()
+
+    try:
+        page_writer = TransactionalPageWriter(manager, wal)
+
+        page_id = page_writer.allocate_page(transaction_id=1)
+
+        assert page_id == 1
+
+        records = wal.read_all()
+
+        assert records[-1]["type"] == "PAGE_ALLOCATED"
+        assert records[-1]["data"]["transaction_id"] == 1
+        assert records[-1]["data"]["page_id"] == page_id
+
+    finally:
+        wal.close()
+        manager.close()
+import pytest
+
+
+@pytest.mark.parametrize("transaction_id", [0, -1, True, 1.5, "1"])
+def test_allocate_page_rejects_invalid_transaction_id(
+    tmp_path,
+    transaction_id,
+):
+    from objectdb.page_manager import PageManager
+    from objectdb.wal import WriteAheadLog
+    from objectdb.transactional_page_writer import (
+        TransactionalPageWriter,
+    )
+
+    db_path = tmp_path / "test.db"
+    wal_path = tmp_path / "test.wal"
+
+    manager = PageManager(db_path)
+    manager.initialize()
+    manager.open()
+
+    wal = WriteAheadLog(wal_path)
+    wal.open()
+
+    try:
+        page_writer = TransactionalPageWriter(manager, wal)
+
+        with pytest.raises(ValueError, match="Transaction ID"):
+            page_writer.allocate_page(transaction_id)
+
+    finally:
+        wal.close()
+        manager.close()
