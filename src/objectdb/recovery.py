@@ -14,6 +14,7 @@ class RecoveryManager:
         "ROLLBACK",
         "PAGE_BEFORE_IMAGE",
         "PAGE_ALLOCATED",
+        "ROOT_PAGE_BEFORE_IMAGE",
     }
 
     def __init__(self, wal):
@@ -56,6 +57,7 @@ class RecoveryManager:
                     "rolled_back": False,
                     "before_images": [],
                     "allocated_pages": [],
+                    "root_before_images": [],
                 }
 
             transaction = transactions[transaction_id]
@@ -184,6 +186,44 @@ class RecoveryManager:
 
                 transaction["allocated_pages"].append(page_id)
 
+            elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
+                if not transaction["begun"]:
+                    raise ValueError(
+                        "ROOT_PAGE_BEFORE_IMAGE without BEGIN"
+                    )
+
+                if transaction["committed"]:
+                    raise ValueError(
+                        "ROOT_PAGE_BEFORE_IMAGE after COMMIT"
+                    )
+
+                if transaction["rolled_back"]:
+                    raise ValueError(
+                        "ROOT_PAGE_BEFORE_IMAGE after ROLLBACK"
+                    )
+
+                orig_root = data.get("original_root_page_id")
+                if (
+                    not isinstance(orig_root, int)
+                    or isinstance(orig_root, bool)
+                    or orig_root < 0
+                ):
+                    raise ValueError(
+                        "Invalid original root page ID in before-image"
+                    )
+
+                new_root = data.get("new_root_page_id")
+                if (
+                    not isinstance(new_root, int)
+                    or isinstance(new_root, bool)
+                    or new_root < 0
+                ):
+                    raise ValueError(
+                        "Invalid new root page ID in before-image"
+                    )
+
+                transaction["root_before_images"].append(data)
+
         committed = []
         rolled_back = []
         incomplete = []
@@ -216,6 +256,7 @@ class RecoveryManager:
 
         before_images = []
         allocated_pages = []
+        root_before_images = []
 
         for record in records:
             record_type = record.get("type")
@@ -231,14 +272,30 @@ class RecoveryManager:
             elif record_type == "PAGE_ALLOCATED":
                 allocated_pages.append(data)
 
-        # Restore modified pages in reverse WAL order.
-        for record_data in reversed(before_images):
-            page_writer.restore_page(
-                record_data["page_id"],
-                record_data["original_data"],
-            )
+            elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
+                root_before_images.append(data)
 
-        if before_images:
+        # Restore modified pages and root page ID in reverse WAL order.
+        for record in reversed(records):
+            record_type = record.get("type")
+            data = record.get("data", {})
+            transaction_id = data.get("transaction_id")
+
+            if transaction_id not in incomplete_transactions:
+                continue
+
+            if record_type == "PAGE_BEFORE_IMAGE":
+                page_writer.restore_page(
+                    data["page_id"],
+                    data["original_data"],
+                )
+            elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
+                if hasattr(page_writer, "restore_root_page_id"):
+                    page_writer.restore_root_page_id(
+                        data["original_root_page_id"],
+                    )
+
+        if before_images or root_before_images:
             page_writer.sync()
 
         return {

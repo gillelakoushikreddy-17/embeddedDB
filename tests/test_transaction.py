@@ -175,3 +175,34 @@ def test_invalid_transaction_id_is_rejected(tmp_path):
 
     finally:
         close_resources(manager, wal)
+
+
+def test_transaction_allocate_and_read_page(tmp_path):
+    manager, wal, _, tx, p1 = setup_transaction(tmp_path, "alloc_read")
+    try:
+        new_page = tx.allocate_page()
+        assert new_page > p1
+
+        data = tx.read_page(new_page)
+        assert len(data) == PAGE_SIZE
+        assert data == b"\x00" * PAGE_SIZE
+    finally:
+        close_resources(manager, wal)
+
+
+def test_transaction_rollback_restores_root_page_id(tmp_path):
+    manager, wal, _, tx, _ = setup_transaction(tmp_path, "root_rb")
+    try:
+        from objectdb.header import read_header
+        manager.update_root_page_id(1)
+
+        # Update root in transaction
+        tx.update_root_page_id(5)
+        assert read_header(manager.read_page(0))["root_page_id"] == 5
+
+        # Rollback should restore root to 1
+        tx.rollback()
+        assert read_header(manager.read_page(0))["root_page_id"] == 1
+    finally:
+        close_resources(manager, wal)
+

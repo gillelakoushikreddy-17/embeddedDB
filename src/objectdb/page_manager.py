@@ -93,9 +93,9 @@ class PageManager:
         if (
                 not isinstance(root_page_id, int)
                 or isinstance(root_page_id, bool)
-                or root_page_id < 1
+                or root_page_id < 0
         ):
-            raise ValueError("Root page ID must be a positive integer")
+            raise ValueError("Root page ID must be a non-negative integer")
 
         self.file.seek(0)
         page_zero = self.file.read(PAGE_SIZE)

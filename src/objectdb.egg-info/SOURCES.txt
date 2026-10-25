@@ -1,3 +1,5 @@
+LICENSE
+README.md
 pyproject.toml
 src/objectdb/__init__.py
 src/objectdb/btree.py
@@ -21,8 +23,10 @@ tests/test_allocate_page.py
 tests/test_btree.py
 tests/test_btree_leaf_page.py
 tests/test_btree_page.py
+tests/test_crash_recovery_scenarios.py
 tests/test_database.py
 tests/test_internal_rebalancing.py
+tests/test_objectdb_api.py
 tests/test_objectdb_persistence.py
 tests/test_objectdb_startup_recovery.py
 tests/test_page_manager.py
@@ -37,5 +41,6 @@ tests/test_recovery_multiple_pages.py
 tests/test_recovery_restore.py
 tests/test_segment.py
 tests/test_transaction.py
+tests/test_transaction_integration.py
 tests/test_transactional_page_writer.py
 tests/test_wal.py

@@ -407,3 +407,79 @@ def test_analyze_rejects_wrong_before_image_size():
         match="exactly 4096 bytes",
     ):
         recovery.analyze()
+
+
+def test_analyze_rejects_root_before_image_without_begin():
+    records = [
+        make_record(
+            "ROOT_PAGE_BEFORE_IMAGE",
+            1,
+            original_root_page_id=0,
+            new_root_page_id=1,
+        ),
+    ]
+    recovery = RecoveryManager(FakeWAL(records))
+    with pytest.raises(ValueError, match="ROOT_PAGE_BEFORE_IMAGE without BEGIN"):
+        recovery.analyze()
+
+
+def test_analyze_rejects_root_before_image_after_commit():
+    records = [
+        make_record("BEGIN", 1),
+        make_record("COMMIT", 1),
+        make_record(
+            "ROOT_PAGE_BEFORE_IMAGE",
+            1,
+            original_root_page_id=0,
+            new_root_page_id=1,
+        ),
+    ]
+    recovery = RecoveryManager(FakeWAL(records))
+    with pytest.raises(ValueError, match="ROOT_PAGE_BEFORE_IMAGE after COMMIT"):
+        recovery.analyze()
+
+
+def test_analyze_rejects_invalid_root_page_ids():
+    records = [
+        make_record("BEGIN", 1),
+        make_record(
+            "ROOT_PAGE_BEFORE_IMAGE",
+            1,
+            original_root_page_id=-1,
+            new_root_page_id=1,
+        ),
+    ]
+    recovery = RecoveryManager(FakeWAL(records))
+    with pytest.raises(ValueError, match="Invalid original root page ID"):
+        recovery.analyze()
+
+
+def test_recover_restores_root_page_id_for_incomplete_transaction():
+    records = [
+        make_record("BEGIN", 1),
+        make_record(
+            "ROOT_PAGE_BEFORE_IMAGE",
+            1,
+            original_root_page_id=1,
+            new_root_page_id=5,
+        ),
+    ]
+
+    class RootTrackingPageWriter:
+        def __init__(self):
+            self.restored_roots = []
+            self.sync_called = False
+
+        def restore_root_page_id(self, root_id):
+            self.restored_roots.append(root_id)
+
+        def sync(self):
+            self.sync_called = True
+
+    writer = RootTrackingPageWriter()
+    recovery = RecoveryManager(FakeWAL(records))
+    result = recovery.recover(writer)
+
+    assert writer.restored_roots == [1]
+    assert writer.sync_called is True
+    assert result["recovered_transactions"] == [1]

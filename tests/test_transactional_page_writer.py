@@ -209,3 +209,51 @@ def test_allocate_page_rejects_invalid_transaction_id(
     finally:
         wal.close()
         manager.close()
+
+
+def test_update_root_page_id_logs_before_image(tmp_path):
+    manager, wal, writer, _ = setup_database(tmp_path)
+    try:
+        # Default root page is NO_ROOT_PAGE (0)
+        writer.update_root_page_id(1, 5)
+
+        # Header on disk should now be 5
+        from objectdb.header import read_header
+        assert read_header(manager.read_page(0))["root_page_id"] == 5
+
+        # WAL should contain ROOT_PAGE_BEFORE_IMAGE
+        records = wal.read_all()
+        last = records[-1]
+        assert last["type"] == "ROOT_PAGE_BEFORE_IMAGE"
+        assert last["data"]["transaction_id"] == 1
+        assert last["data"]["original_root_page_id"] == 0
+        assert last["data"]["new_root_page_id"] == 5
+
+        # Restoring should revert root page id
+        writer.restore_root_page_id(0)
+        assert read_header(manager.read_page(0))["root_page_id"] == 0
+    finally:
+        wal.close()
+        manager.close()
+
+
+@pytest.mark.parametrize("invalid_tx_id", [0, -1, True, "1", 2.5])
+def test_update_root_page_id_rejects_invalid_tx_id(tmp_path, invalid_tx_id):
+    manager, wal, writer, _ = setup_database(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="Transaction ID"):
+            writer.update_root_page_id(invalid_tx_id, 1)
+    finally:
+        wal.close()
+        manager.close()
+
+
+@pytest.mark.parametrize("invalid_root_id", [-1, True, "1", 2.5])
+def test_update_root_page_id_rejects_invalid_root_id(tmp_path, invalid_root_id):
+    manager, wal, writer, _ = setup_database(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="Root page ID"):
+            writer.update_root_page_id(1, invalid_root_id)
+    finally:
+        wal.close()
+        manager.close()

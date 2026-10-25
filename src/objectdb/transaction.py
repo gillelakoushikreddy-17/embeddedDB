@@ -45,6 +45,25 @@ class Transaction:
             new_data,
         )
 
+    def allocate_page(self):
+        """Allocate a page through the transactional page writer."""
+        self._ensure_active()
+
+        return self.page_writer.allocate_page(self.transaction_id)
+
+    def update_root_page_id(self, root_page_id):
+        """Update the root page ID through the transactional page writer."""
+        self._ensure_active()
+
+        self.page_writer.update_root_page_id(
+            self.transaction_id,
+            root_page_id,
+        )
+
+    def read_page(self, page_id):
+        """Read a page through the underlying page manager."""
+        return self.page_writer.page_manager.read_page(page_id)
+
     def commit(self):
         """Commit the transaction."""
         self._ensure_active()
@@ -61,25 +80,34 @@ class Transaction:
         self.state = TransactionState.COMMITTED
 
     def rollback(self):
-        """Restore all modified pages in reverse log order."""
+        """Restore all modified pages and root page ID in reverse log order."""
         self._ensure_active()
 
         records = self.wal.read_all()
 
-        before_images = [
-            record["data"]
+        tx_records = [
+            record
             for record in records
-            if record.get("type") == "PAGE_BEFORE_IMAGE"
-            and record.get("data", {}).get("transaction_id")
+            if record.get("data", {}).get("transaction_id")
             == self.transaction_id
         ]
 
-        # Restore the most recent before-image first.
-        for record_data in reversed(before_images):
-            self.page_writer.restore_page(
-                record_data["page_id"],
-                record_data["original_data"],
-            )
+        # Restore the most recent before-images first.
+        for record in reversed(tx_records):
+            record_type = record.get("type")
+            record_data = record.get("data", {})
+
+            if record_type == "PAGE_BEFORE_IMAGE":
+                self.page_writer.restore_page(
+                    record_data["page_id"],
+                    record_data["original_data"],
+                )
+            elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
+                if hasattr(self.page_writer, "restore_root_page_id"):
+                    self.page_writer.restore_root_page_id(
+                        record_data["original_root_page_id"],
+                    )
+
         # Ensure restored pages are durable before recording rollback.
         self.page_writer.sync()
 
@@ -89,3 +117,33 @@ class Transaction:
         )
 
         self.state = TransactionState.ABORTED
+
+
+class TransactionPageAdapter:
+    """
+    Adapts a Transaction to the page manager interface required by PersistentBTree.
+    Routes page reads, page writes, page allocations, and root updates through the transaction.
+    """
+
+    def __init__(self, transaction, page_manager, tree=None):
+        self.transaction = transaction
+        self.page_manager = page_manager
+        self.tree = tree
+
+    def read_page(self, page_id):
+        return self.page_manager.read_page(page_id)
+
+    def write_page(self, page_id, data):
+        self.transaction.write_page(page_id, data)
+
+    def allocate_page(self):
+        return self.transaction.allocate_page()
+
+    def update_root_page_id(self, root_page_id):
+        self.transaction.update_root_page_id(root_page_id)
+        if self.tree is not None:
+            self.tree.root_page_id = root_page_id
+
+    @property
+    def file(self):
+        return self.page_manager.file

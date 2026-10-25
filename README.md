@@ -1,0 +1,200 @@
+# ObjectDB
+
+**ObjectDB** is a lightweight, reliable, single-process embedded key-value database engine written in Python. It is designed to store metadata and record references, serving as the metadata storage engine for custom storage backends such as S3-like object storage services.
+
+---
+
+## Architecture Overview
+
+ObjectDB separates index structure from payload storage:
+
+- **B+ Tree Index (`PersistentBTree`)**: Maintains a persistent, ordered index of 64-bit integer keys mapped to fixed-size record pointers (`(segment_id, offset, size)`). Supports root splits, internal node splits, leaf borrowing, merging, and tree rebalancing.
+- **Page Manager (`PageManager`)**: Allocates, reads, and writes fixed-size 4096-byte database pages (`objectdb.data`). Page 0 is reserved for header metadata (including magic number, format version, page size, and the root page ID).
+- **Segment Storage (`Segment`)**: Append-only log file (`segment-0.dat`) storing arbitrary byte payloads.
+- **Write-Ahead Log (`WriteAheadLog`)**: An append-only journal (`objectdb.wal`) that records operation lifecycle records (`BEGIN`, `PAGE_ALLOCATED`, `PAGE_BEFORE_IMAGE`, `ROOT_PAGE_BEFORE_IMAGE`, `COMMIT`, `ROLLBACK`) with monotonically increasing Log Sequence Numbers (LSNs).
+- **Transaction Manager (`Transaction` & `TransactionalPageWriter`)**: Ensures ACID properties for database mutations using before-image undo logging.
+- **Crash Recovery (`RecoveryManager`)**: Analyzes the WAL upon startup and restores before-images for any uncommitted/interrupted transactions, ensuring the database is always consistent before accepting operations.
+
+---
+
+## Installation
+
+### Prerequisites
+- Python 3.10 or higher.
+
+### Installing Locally from Wheel
+Build the distribution wheel and install it into your project virtual environment:
+
+```bash
+# In your target application's virtual environment:
+pip install path/to/objectdb/dist/objectdb-0.1.0-py3-none-any.whl
+```
+
+### Installing in Editable / Development Mode
+```bash
+git clone <repository-url> objectdb
+cd objectdb
+pip install -e .
+```
+
+---
+
+## Basic Usage
+
+### Context Manager (Recommended)
+
+```python
+from objectdb import ObjectDB
+
+# Open database directory; creates files if they do not exist
+with ObjectDB("./my_database") as db:
+    # Insert or update records
+    db.put(100, b"Hello, ObjectDB!")
+
+    # Read records
+    value = db.get(100)
+    print(value)  # Output: b"Hello, ObjectDB!"
+
+    # Query missing keys
+    missing = db.get(999)
+    print(missing)  # Output: None
+
+    # Delete records
+    deleted = db.delete(100)
+    print(deleted)  # Output: True
+    print(db.get(100))  # Output: None
+```
+
+### Manual Open / Close
+
+```python
+from objectdb import ObjectDB
+
+db = ObjectDB("./my_database")
+db.open()
+try:
+    db.put(1, b"Payload bytes")
+    val = db.get(1)
+finally:
+    db.close()
+```
+
+---
+
+## Transactions and Recovery
+
+### Recovery Model: Before-Image (Undo Logging)
+
+ObjectDB uses a strict before-image undo logging protocol:
+
+1. **Transaction Start**: Every mutation begins with a `BEGIN` record logged with a unique transaction ID.
+2. **Page Allocation**: Before new pages are appended to the database file, `PAGE_ALLOCATED` is logged in the WAL.
+3. **Before-Image Logging**: Before any existing page is overwritten, its complete 4096-byte before-image is written to the WAL via `PAGE_BEFORE_IMAGE`.
+4. **Metadata Protection**: If a B+ tree split or merge changes the root page ID, `ROOT_PAGE_BEFORE_IMAGE` records the previous root ID before page 0 is updated on disk.
+5. **Durability & Commit**: All modified pages and the segment file are flushed to disk (`fsync`), followed by an `fsync`-persisted `COMMIT` record in the WAL.
+6. **Rollback**: If an exception occurs or the transaction is aborted, modified pages and root page IDs are restored from before-images in reverse log order, and `ROLLBACK` is recorded.
+
+### Explicit Batch Transactions
+
+Group multiple mutations into a single atomic transaction:
+
+```python
+with ObjectDB("./my_database") as db:
+    with db.transaction():
+        db.put(1, b"first")
+        db.put(2, b"second")
+        # If an exception is raised here, all mutations roll back automatically!
+```
+
+### Crash Recovery Guarantees
+
+When opening a database (`db.open()`):
+- ObjectDB scans the WAL to identify committed, rolled-back, and incomplete transactions.
+- Any incomplete transaction (a transaction with a `BEGIN` but neither `COMMIT` nor `ROLLBACK`) is automatically undone by restoring its before-images in reverse WAL order.
+- Incomplete tree splits or deletions are restored to their consistent pre-transaction state.
+- Incomplete or truncated final WAL records (caused by mid-write power loss or process kill) are safely truncated.
+- Recovery is idempotent: repeated recoveries produce the identical consistent state.
+
+---
+
+## Integration with S3-Like Object Storage Backends
+
+ObjectDB is ideal as the **metadata engine** for an S3-like object storage service:
+
+```python
+from objectdb import ObjectDB
+
+class S3MetadataStore:
+    def __init__(self, metadata_dir: str):
+        self.db = ObjectDB(metadata_dir)
+
+    def start(self):
+        self.db.open()
+
+    def stop(self):
+        self.db.close()
+
+    def put_object_metadata(self, object_id: int, metadata_json: bytes):
+        """Map integer object ID to metadata (ETag, size, content-type, block list)."""
+        self.db.put(object_id, metadata_json)
+
+    def get_object_metadata(self, object_id: int) -> bytes | None:
+        return self.db.get(object_id)
+
+    def delete_object_metadata(self, object_id: int) -> bool:
+        return self.db.delete(object_id)
+```
+
+### Recommended Storage Layout for Object Storage
+- **ObjectDB**: Stores object IDs, bucket mappings, chunk maps, ETags, timestamps, and permissions.
+- **Blob Storage Layer**: Store multi-megabyte/gigabyte object payload chunks directly in dedicated chunk files on disk or raw block storage, keeping ObjectDB fast and compact.
+
+---
+
+## Durability and Crash Safety
+
+- **Process Crash Protection**: Fully protected. Uncommitted page modifications and metadata updates are rolled back upon startup recovery.
+- **Disk Synchronization**: WAL writes and page commits invoke `os.fsync()` to request durable disk persistence.
+- **Power Loss**: On filesystems that honor barrier and `fsync` flushes, committed data survives power loss. Truncated partial writes to the WAL are detected and truncated safely during open.
+- **Orphaned Segment Bytes**: If a transaction appends bytes to a segment but aborts before committing the B+ tree index update, those appended segment bytes become unreferenced ("orphaned"). They are harmless and inaccessible through `db.get()`.
+
+---
+
+## Current Limitations
+
+- **Single Process**: ObjectDB does not support concurrent multi-process access to the same database files.
+- **Single Active Transaction**: Nested or concurrent concurrent transactions within one database connection are not supported.
+- **Integer Keys Only**: Keys must be 64-bit signed integers (`int`). String/UUID object keys should be hashed or mapped to integer IDs.
+- **Single Segment File**: Payload records are currently stored in `segment-0.dat`. Multi-segment rotation and segment garbage collection are not yet implemented.
+
+---
+
+## Development and Testing
+
+### Running Tests
+
+Run the complete automated test suite using `pytest`:
+
+```bash
+pytest -v
+```
+
+Run targeted test categories:
+
+```bash
+# Run transaction and recovery suites
+pytest tests/test_transaction_integration.py tests/test_crash_recovery_scenarios.py -v
+
+# Run public API tests
+pytest tests/test_objectdb_api.py -v
+```
+
+### Building the Package
+
+```bash
+# Build source distribution and wheel
+python -m pip install --upgrade build
+python -m build
+```
+
+Distribution packages will be generated in `dist/`.

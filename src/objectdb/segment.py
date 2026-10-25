@@ -44,6 +44,15 @@ class Segment:
         return data
 
 
+    def sync(self):
+        if self.file is None:
+            raise RuntimeError("Segment is not open")
+
+        import os
+
+        self.file.flush()
+        os.fsync(self.file.fileno())
+
     def close(self):
         if self.file is not None:
             self.file.close()
