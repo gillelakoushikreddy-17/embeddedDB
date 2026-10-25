@@ -74,12 +74,6 @@ class WriteAheadLog:
 
                 last_lsn = lsn
 
-
-
-
-
-                last_lsn = lsn
-
             self.next_lsn = last_lsn + 1
             self.file.seek(0, os.SEEK_END)
 
@@ -114,15 +108,24 @@ class WriteAheadLog:
             raise ValueError("WAL data must be JSON-serializable") from exc
 
         self.file.seek(0, os.SEEK_END)
-        self.file.write(encoded)
+        start_pos = self.file.tell()
 
-        # Flush Python's buffer and request OS-level synchronization.
-        self.file.flush()
-        os.fsync(self.file.fileno())
-
-        self.next_lsn += 1
-
-        return lsn
+        try:
+            self.file.write(encoded)
+            # Flush Python's buffer and request OS-level synchronization.
+            self.file.flush()
+            if hasattr(self.file, "fileno"):
+                os.fsync(self.file.fileno())
+            self.next_lsn += 1
+            return lsn
+        except Exception:
+            try:
+                self.file.seek(start_pos)
+                self.file.truncate()
+                self.file.flush()
+            except Exception:
+                pass
+            raise
 
     def read_all(self):
         """Read all valid WAL records in LSN order."""

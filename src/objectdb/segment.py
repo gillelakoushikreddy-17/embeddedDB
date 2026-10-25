@@ -17,23 +17,39 @@ class Segment:
         if self.file is None:
             raise RuntimeError("Segment is not open")
 
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("Data must be bytes-like")
+
         self.file.seek(0, 2)
         offset = self.file.tell()
 
-        self.file.write(data)
-        self.file.flush()
+        try:
+            self.file.write(data)
+            self.file.flush()
+        except Exception:
+            try:
+                self.file.seek(offset)
+                self.file.truncate()
+                self.file.flush()
+            except Exception:
+                pass
+            raise
 
         return offset, len(data)
-
-
-
 
     def read(self, offset: int, size: int) -> bytes:
         if self.file is None:
             raise RuntimeError("Segment is not open")
 
-        if offset < 0 or size < 0:
-            raise ValueError("Offset and size must be non-negative")
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or offset < 0
+            or size < 0
+        ):
+            raise ValueError("Offset and size must be non-negative integers")
 
         self.file.seek(offset)
         data = self.file.read(size)
@@ -43,7 +59,6 @@ class Segment:
 
         return data
 
-
     def sync(self):
         if self.file is None:
             raise RuntimeError("Segment is not open")
@@ -51,7 +66,8 @@ class Segment:
         import os
 
         self.file.flush()
-        os.fsync(self.file.fileno())
+        if hasattr(self.file, "fileno"):
+            os.fsync(self.file.fileno())
 
     def close(self):
         if self.file is not None:

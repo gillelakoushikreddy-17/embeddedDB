@@ -57,8 +57,13 @@ class PageManager:
             raise ValueError("Page ID must be a non-negative integer")
         if page_id == 0:
             raise ValueError("Cannot overwrite the database header page")
-        if len(data) != PAGE_SIZE:
+        if not isinstance(data, (bytes, bytearray, memoryview)) or len(data) != PAGE_SIZE:
             raise ValueError("exactly 4096 bytes")
+
+        self.file.seek(0, 2)
+        file_size = self.file.tell()
+        if page_id > file_size // PAGE_SIZE:
+            raise ValueError(f"Page ID {page_id} exceeds current allocated page count")
 
         offset = page_id * PAGE_SIZE
 
@@ -84,8 +89,17 @@ class PageManager:
         page_id = file_size // PAGE_SIZE
 
         self.file.seek(0, 2)
-        self.file.write(b"\x00" * PAGE_SIZE)
-        self.file.flush()
+        try:
+            self.file.write(b"\x00" * PAGE_SIZE)
+            self.file.flush()
+        except Exception:
+            try:
+                self.file.seek(file_size)
+                self.file.truncate()
+                self.file.flush()
+            except Exception:
+                pass
+            raise
 
         return page_id
 
@@ -114,5 +128,6 @@ class PageManager:
             raise RuntimeError("Database file is not open")
 
         self.file.flush()
-        os.fsync(self.file.fileno())
+        if hasattr(self.file, "fileno"):
+            os.fsync(self.file.fileno())
 

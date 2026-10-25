@@ -10,6 +10,15 @@ from objectdb.btree import (
     decode_internal_node,
 )
 
+MIN_KEY = -9223372036854775808
+MAX_KEY = 9223372036854775807
+
+def _validate_key(key):
+    if not isinstance(key, int) or isinstance(key, bool):
+        raise TypeError("Key must be an integer")
+    if not (MIN_KEY <= key <= MAX_KEY):
+        raise ValueError(f"Key {key} out of range for 64-bit signed integer [{MIN_KEY}, {MAX_KEY}]")
+
 
 class PersistentBTree:
     def __init__(self, page_manager):
@@ -59,6 +68,7 @@ class PersistentBTree:
         return root_page_id
 
     def insert_into_root(self, key, record):
+        _validate_key(key)
         if self.root_page_id is None:
             raise ValueError("Tree has not been created")
 
@@ -159,6 +169,7 @@ class PersistentBTree:
         )
 
     def search(self, key):
+        _validate_key(key)
         if self.root_page_id is None:
             raise ValueError("Tree has not been created")
 
@@ -176,6 +187,7 @@ class PersistentBTree:
         return None
 
     def delete(self, key):
+        _validate_key(key)
         if self.root_page_id is None:
             raise ValueError("Tree has not been created")
 

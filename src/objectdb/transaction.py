@@ -4,7 +4,9 @@ from enum import Enum, auto
 
 class TransactionState(Enum):
     ACTIVE = auto()
+    COMMITTING = auto()
     COMMITTED = auto()
+    FAILED = auto()
     ABORTED = auto()
 
 
@@ -67,56 +69,68 @@ class Transaction:
     def commit(self):
         """Commit the transaction."""
         self._ensure_active()
+        self.state = TransactionState.COMMITTING
 
-        # Make database page changes durable first.
-        self.page_writer.sync()
+        try:
+            # Make database page changes durable first.
+            self.page_writer.sync()
 
-        # Record the commit only after syncing the database.
-        self.wal.append(
-            "COMMIT",
-            {"transaction_id": self.transaction_id},
-        )
-
-        self.state = TransactionState.COMMITTED
+            # Record the commit only after syncing the database.
+            self.wal.append(
+                "COMMIT",
+                {"transaction_id": self.transaction_id},
+            )
+            self.state = TransactionState.COMMITTED
+        except Exception:
+            self.state = TransactionState.FAILED
+            raise
 
     def rollback(self):
         """Restore all modified pages and root page ID in reverse log order."""
+        if self.state in (TransactionState.COMMITTING, TransactionState.FAILED):
+            raise RuntimeError(
+                f"Cannot roll back transaction in {self.state.name} state; outcome may be uncertain"
+            )
         self._ensure_active()
 
-        records = self.wal.read_all()
+        try:
+            records = self.wal.read_all()
 
-        tx_records = [
-            record
-            for record in records
-            if record.get("data", {}).get("transaction_id")
-            == self.transaction_id
-        ]
+            tx_records = [
+                record
+                for record in records
+                if record.get("data", {}).get("transaction_id")
+                == self.transaction_id
+            ]
 
-        # Restore the most recent before-images first.
-        for record in reversed(tx_records):
-            record_type = record.get("type")
-            record_data = record.get("data", {})
+            # Restore the most recent before-images first.
+            for record in reversed(tx_records):
+                record_type = record.get("type")
+                record_data = record.get("data", {})
 
-            if record_type == "PAGE_BEFORE_IMAGE":
-                self.page_writer.restore_page(
-                    record_data["page_id"],
-                    record_data["original_data"],
-                )
-            elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
-                if hasattr(self.page_writer, "restore_root_page_id"):
-                    self.page_writer.restore_root_page_id(
-                        record_data["original_root_page_id"],
+                if record_type == "PAGE_BEFORE_IMAGE":
+                    self.page_writer.restore_page(
+                        record_data["page_id"],
+                        record_data["original_data"],
                     )
+                elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
+                    if hasattr(self.page_writer, "restore_root_page_id"):
+                        self.page_writer.restore_root_page_id(
+                            record_data["original_root_page_id"],
+                        )
 
-        # Ensure restored pages are durable before recording rollback.
-        self.page_writer.sync()
+            # Ensure restored pages are durable before recording rollback.
+            self.page_writer.sync()
 
-        self.wal.append(
-            "ROLLBACK",
-            {"transaction_id": self.transaction_id},
-        )
+            self.wal.append(
+                "ROLLBACK",
+                {"transaction_id": self.transaction_id},
+            )
 
-        self.state = TransactionState.ABORTED
+            self.state = TransactionState.ABORTED
+        except Exception:
+            self.state = TransactionState.FAILED
+            raise
 
 
 class TransactionPageAdapter:
