@@ -575,4 +575,151 @@ def test_backup_parent_dir_fsync_failure_with_restoration_failure_preserves_old_
         db.close()
 
 
+def test_backup_restoration_directory_sync_failure_reported_and_preserves_backup(tmp_path):
+    """
+    Test A: Restoration directory sync failure
+    - Start with an existing valid backup.
+    - Inject a failure during the initial replacement operation (staging rename fails).
+    - Allow restoration of the previous backup to its original path to succeed.
+    - Inject a genuine I/O error during directory synchronization after restoration.
+    - Verify the error is reported via exception chaining rather than swallowed.
+    - Verify the previous backup's contents remain recoverable at target_path.
+    - Verify cleanup does not destroy the only recoverable backup.
+    """
+    db_path = tmp_path / "restore_sync_fail_src"
+    backup_path = tmp_path / "restore_sync_fail_dst"
+
+    db = ObjectDB(db_path)
+    db.open()
+    db.put(1, b"initial_valid_backup_data")
+    db.backup(backup_path)
+
+    # Verify initial backup is functional
+    b1 = ObjectDB(backup_path)
+    b1.open()
+    assert b1.get(1) == b"initial_valid_backup_data"
+    b1.close()
+
+    # Mutate source db
+    db.put(2, b"uncommitted_replacement_data")
+
+    staging_rename_err = OSError(errno.EIO, "Injected staging rename failure")
+    restoration_sync_err = OSError(errno.EIO, "Injected restoration directory sync failure")
+
+    original_rename = Path.rename
+    original_sync = database._sync_directory
+
+    # Track when restoration rename has succeeded
+    restoration_rename_completed = [False]
+
+    def failing_rename(self, target):
+        if Path(target) == backup_path and ".tmp_backup_" in str(self):
+            # Step 1: Initial replacement rename fails
+            raise staging_rename_err
+        if Path(target) == backup_path and ".old_backup_" in str(self):
+            # Step 2: Restoration rename succeeds
+            res = original_rename(self, target)
+            restoration_rename_completed[0] = True
+            return res
+        return original_rename(self, target)
+
+    def failing_sync(path):
+        if Path(path) == backup_path.parent and restoration_rename_completed[0]:
+            # Step 3: Directory sync after restoration fails with genuine I/O error
+            raise restoration_sync_err
+        return original_sync(path)
+
+    with patch.object(Path, "rename", side_effect=failing_rename, autospec=True):
+        with patch("objectdb.database._sync_directory", side_effect=failing_sync):
+            with pytest.raises(OSError, match="Injected staging rename failure") as exc_info:
+                db.backup(backup_path)
+
+            # Verify restoration sync failure is chained and NOT swallowed
+            assert exc_info.value is staging_rename_err
+            assert exc_info.value.__cause__ is restoration_sync_err
+
+    # Verify the previous backup's contents remain recoverable at backup_path
+    assert backup_path.exists(), "Previous backup should be preserved at backup_path"
+    b_recovered = ObjectDB(backup_path)
+    b_recovered.open()
+    try:
+        assert b_recovered.check_integrity()["valid"] is True
+        assert b_recovered.get(1) == b"initial_valid_backup_data"
+        assert b_recovered.get(2) is None
+    finally:
+        b_recovered.close()
+
+    # Verify staging cleanup did not leave stray files
+    leftover = [
+        p.name for p in tmp_path.iterdir()
+        if p.name.startswith(".tmp_backup_") or p.name.startswith(".old_backup_")
+    ]
+    assert leftover == []
+    db.close()
+
+
+def test_sync_directory_unsupported_errnos_return_false(tmp_path):
+    """
+    Unsupported directory synchronization errnos (EINVAL, ENOTSUP, ENOSYS)
+    return False without raising exceptions.
+    """
+    for code in (errno.EINVAL, errno.ENOTSUP, errno.ENOSYS):
+        with patch("os.fsync", side_effect=OSError(code, "Unsupported operation")):
+            result = database._sync_directory(tmp_path)
+            assert result is False, f"Expected False for errno {code}"
+
+
+def test_sync_directory_genuine_io_errnos_raise(tmp_path):
+    """
+    Genuine filesystem and hardware I/O errnos (EIO, ENOSPC, EROFS)
+    must propagate and raise OSError.
+    """
+    for code in (errno.EIO, errno.ENOSPC, errno.EROFS):
+        with patch("os.fsync", side_effect=OSError(code, "Hardware error")):
+            with pytest.raises(OSError) as exc_info:
+                database._sync_directory(tmp_path)
+            assert exc_info.value.errno == code
+
+
+def test_sync_directory_permission_denied_raises_on_posix(tmp_path):
+    """
+    On POSIX systems, a genuine permission denial (EACCES / EPERM) on os.open()
+    must raise PermissionError and never be misclassified as unsupported.
+    """
+    perm_err = PermissionError(errno.EACCES, "Permission denied")
+    with patch("sys.platform", "darwin"):
+        with patch("os.name", "posix"):
+            with patch("os.open", side_effect=perm_err):
+                with pytest.raises(PermissionError) as exc_info:
+                    database._sync_directory(tmp_path)
+                assert exc_info.value is perm_err
+
+
+def test_sync_directory_windows_platform_limitation_vs_actual_permission_denial(tmp_path):
+    """
+    On Windows (NT), distinguish between:
+    1. The known CRT limitation (EACCES on directory open, but directory is readable): returns False.
+    2. Genuine access-denied failure (EACCES on directory open, AND scandir fails): raises PermissionError.
+    """
+    perm_err = PermissionError(errno.EACCES, "Access is denied")
+
+    # Case 1: Windows CRT limitation (directory is accessible via scandir)
+    with patch("sys.platform", "win32"):
+        with patch("os.name", "nt"):
+            with patch("os.open", side_effect=perm_err):
+                # When os.scandir succeeds, the directory is readable; return False
+                result = database._sync_directory(tmp_path)
+                assert result is False
+
+    # Case 2: Genuine access denial on Windows (scandir also fails with PermissionError)
+    with patch("sys.platform", "win32"):
+        with patch("os.name", "nt"):
+            with patch("os.open", side_effect=perm_err):
+                with patch("os.scandir", side_effect=perm_err):
+                    with pytest.raises(PermissionError) as exc_info:
+                        database._sync_directory(tmp_path)
+                    assert exc_info.value is perm_err
+
+
+
 

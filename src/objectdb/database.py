@@ -29,10 +29,33 @@ _UNSUPPORTED_DIR_SYNC_ERRNOS = {
     getattr(errno, "EOPNOTSUPP", errno.EINVAL),
     errno.ENOSYS,
 }
-if sys.platform == "win32" or os.name == "nt":
-    _UNSUPPORTED_DIR_SYNC_ERRNOS.add(errno.EACCES)
-    _UNSUPPORTED_DIR_SYNC_ERRNOS.add(errno.EPERM)
-    _UNSUPPORTED_DIR_SYNC_ERRNOS.add(errno.EBADF)
+
+
+def _is_windows_dir_open_limitation(dir_path: Path, err: OSError) -> bool:
+    """
+    On Windows (NT), POSIX os.open() on directories fails with EACCES or EPERM
+    because the C runtime _open() does not pass FILE_FLAG_BACKUP_SEMANTICS.
+    To distinguish this platform limitation from an actual access-denied error,
+    we probe directory accessibility using os.scandir().
+    If os.scandir() succeeds, the directory is accessible and this is purely
+    a platform limitation (returns True).
+    If os.scandir() fails with a permission error, access is genuinely denied (returns False).
+
+    Unavoidable platform ambiguity:
+    While os.scandir() probes directory readability on Windows, POSIX directory metadata
+    writeback synchronization cannot be verified without platform-specific Win32 APIs.
+    On Windows, directory durability therefore relies on OS writeback timers.
+    """
+    if sys.platform != "win32" and os.name != "nt":
+        return False
+    if err.errno not in (errno.EACCES, errno.EPERM):
+        return False
+    try:
+        with os.scandir(dir_path):
+            pass
+        return True
+    except (OSError, PermissionError):
+        return False
 
 
 def _sync_directory(dir_path: Path) -> bool:
@@ -41,7 +64,7 @@ def _sync_directory(dir_path: Path) -> bool:
 
     Returns True if directory synchronization succeeded.
     Returns False if directory synchronization is unsupported on this platform or filesystem.
-    Raises OSError if a genuine filesystem/hardware I/O error occurs.
+    Raises OSError if a genuine filesystem/hardware I/O error or permission failure occurs.
     """
     flags = os.O_RDONLY
     if hasattr(os, "O_DIRECTORY"):
@@ -54,6 +77,8 @@ def _sync_directory(dir_path: Path) -> bool:
     except OSError as err:
         if err.errno in _UNSUPPORTED_DIR_SYNC_ERRNOS:
             return False
+        if _is_windows_dir_open_limitation(dir_path, err):
+            return False
         raise
 
     try:
@@ -63,6 +88,8 @@ def _sync_directory(dir_path: Path) -> bool:
         return False
     except OSError as err:
         if err.errno in _UNSUPPORTED_DIR_SYNC_ERRNOS:
+            return False
+        if err.errno == errno.EBADF and (sys.platform == "win32" or os.name == "nt"):
             return False
         raise
     finally:
@@ -661,11 +688,11 @@ class ObjectDB:
                         if target_path.exists():
                             _remove_path(target_path)
                         old_backup_dir.rename(target_path)
-                        try:
-                            _sync_directory(target_path.parent)
-                        except Exception:
-                            pass
+                        # Previous backup is now back at target_path; clear old_backup_dir reference
+                        # so that target_path is not treated as a temporary directory to delete.
                         old_backup_dir = None
+                        # Durability step: synchronize parent directory to record the restoration on disk.
+                        _sync_directory(target_path.parent)
                     except Exception as err:
                         restore_err = err
                 else:
