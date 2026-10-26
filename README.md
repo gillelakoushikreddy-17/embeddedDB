@@ -14,44 +14,55 @@ ObjectDB separates index structure from payload storage:
 - **Write-Ahead Log (`WriteAheadLog`)**: An append-only journal (`objectdb.wal`) that records operation lifecycle records (`BEGIN`, `PAGE_ALLOCATED`, `PAGE_BEFORE_IMAGE`, `ROOT_PAGE_BEFORE_IMAGE`, `COMMIT`, `ROLLBACK`) with monotonically increasing Log Sequence Numbers (LSNs).
 - **Transaction Manager (`Transaction` & `TransactionalPageWriter`)**: Ensures ACID properties for database mutations using before-image undo logging.
 - **Crash Recovery (`RecoveryManager`)**: Analyzes the WAL upon startup and restores before-images for any uncommitted/interrupted transactions, ensuring the database is always consistent before accepting operations.
+- **Process Concurrency Lock**: Enforces single-process database access using an OS-level file lock (`objectdb.lock`), preventing conflicting writers from corrupting data.
 
 ---
 
 ## Installation
 
 ### Prerequisites
-- Python 3.10 or higher.
+- Python 3.10 or higher (tested up to Python 3.13).
 
 ### Installing Locally from Wheel
-Build the distribution wheel and install it into your project virtual environment:
+Build or obtain the distribution wheel and install it into your virtual environment:
 
 ```bash
-# In your target application's virtual environment:
-pip install path/to/objectdb/dist/objectdb-0.1.0-py3-none-any.whl
+pip install path/to/dist/objectdb-0.1.0-py3-none-any.whl
 ```
 
 ### Installing in Editable / Development Mode
+Clone the repository and install in editable mode:
+
 ```bash
 git clone <repository-url> objectdb
 cd objectdb
-pip install -e .
+
+# Standard editable install:
+python -m pip install -e .
+
+# Editable install with development and test dependencies (pytest, build):
+python -m pip install -e ".[dev]"
 ```
 
 ---
 
-## Basic Usage
+## Quickstart & Basic Usage
+
+### Key & Value Requirements
+- **Keys**: Signed 64-bit integers (`int`) in the range \([-2^{63}, 2^{63} - 1]\) (`-9223372036854775808` to `9223372036854775807`).
+- **Values**: Arbitrary binary payloads (`bytes`). Structured data (JSON, msgpack, protobuf) must be serialized to `bytes` before storage.
 
 ### Context Manager (Recommended)
 
 ```python
 from objectdb import ObjectDB
 
-# Open database directory; creates files if they do not exist
+# Open database directory; initializes files on first use
 with ObjectDB("./my_database") as db:
     # Insert or update records
     db.put(100, b"Hello, ObjectDB!")
 
-    # Read records
+    # Read records (returns bytes or None if missing)
     value = db.get(100)
     print(value)  # Output: b"Hello, ObjectDB!"
 
@@ -59,10 +70,17 @@ with ObjectDB("./my_database") as db:
     missing = db.get(999)
     print(missing)  # Output: None
 
-    # Delete records
+    # Delete records (returns True if deleted, False if key did not exist)
     deleted = db.delete(100)
     print(deleted)  # Output: True
     print(db.get(100))  # Output: None
+
+    # Check database structural integrity
+    report = db.check_integrity()
+    assert report["valid"] is True
+
+    # Create a hot backup in target directory
+    db.backup("./my_database_backup")
 ```
 
 ### Manual Open / Close
@@ -103,7 +121,7 @@ with ObjectDB("./my_database") as db:
     with db.transaction():
         db.put(1, b"first")
         db.put(2, b"second")
-        # If an exception is raised here, all mutations roll back automatically!
+        # If an exception occurs here, all mutations roll back automatically!
 ```
 
 ### Crash Recovery Guarantees
@@ -111,61 +129,84 @@ with ObjectDB("./my_database") as db:
 When opening a database (`db.open()`):
 - ObjectDB scans the WAL to identify committed, rolled-back, and incomplete transactions.
 - Any incomplete transaction (a transaction with a `BEGIN` but neither `COMMIT` nor `ROLLBACK`) is automatically undone by restoring its before-images in reverse WAL order.
-- Incomplete tree splits or deletions are restored to their consistent pre-transaction state.
-- Incomplete or truncated final WAL records (caused by mid-write power loss or process kill) are safely truncated.
+- Incomplete tree splits, merges, or page allocations are restored to their consistent pre-transaction state.
+- Incomplete or truncated final WAL records (caused by mid-write power loss or process kill) are safely detected and truncated.
 - Recovery is idempotent: repeated recoveries produce the identical consistent state.
 
 ---
 
 ## Integration with S3-Like Object Storage Backends
 
-ObjectDB is ideal as the **metadata engine** for an S3-like object storage service:
+ObjectDB is designed to serve as the **metadata engine** for an S3-like object storage service. String keys (bucket names and object keys) are mapped to 64-bit signed integers, and metadata dictionaries are stored as JSON bytes.
 
 ```python
+import hashlib
+import json
+import time
 from objectdb import ObjectDB
 
-class S3MetadataStore:
-    def __init__(self, metadata_dir: str):
-        self.db = ObjectDB(metadata_dir)
-
-    def start(self):
+class S3MetadataEngine:
+    """S3-compatible metadata store using ObjectDB."""
+    
+    def __init__(self, db_path: str):
+        self.db = ObjectDB(db_path)
         self.db.open()
 
-    def stop(self):
+    def close(self):
         self.db.close()
 
-    def put_object_metadata(self, object_id: int, metadata_json: bytes):
-        """Map integer object ID to metadata (ETag, size, content-type, block list)."""
-        self.db.put(object_id, metadata_json)
+    def _key_to_id(self, bucket: str, key: str) -> int:
+        """Deterministically map bucket + object key string to signed 64-bit int."""
+        digest = hashlib.sha256(f"{bucket}/{key}".encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
-    def get_object_metadata(self, object_id: int) -> bytes | None:
-        return self.db.get(object_id)
+    def put_object_metadata(self, bucket: str, key: str, metadata: dict):
+        """Store object metadata (ETag, size, content-type, timestamps, etc.)."""
+        obj_id = self._key_to_id(bucket, key)
+        payload = json.dumps(metadata).encode("utf-8")
+        self.db.put(obj_id, payload)
 
-    def delete_object_metadata(self, object_id: int) -> bool:
-        return self.db.delete(object_id)
+    def get_object_metadata(self, bucket: str, key: str) -> dict | None:
+        """Retrieve object metadata."""
+        obj_id = self._key_to_id(bucket, key)
+        raw_bytes = self.db.get(obj_id)
+        if raw_bytes is None:
+            return None
+        return json.loads(raw_bytes.decode("utf-8"))
+
+    def delete_object_metadata(self, bucket: str, key: str) -> bool:
+        """Delete object metadata."""
+        obj_id = self._key_to_id(bucket, key)
+        return self.db.delete(obj_id)
+
+    def atomic_batch_update(self, updates: list[tuple[str, str, dict]]):
+        """Update multiple object metadata records atomically."""
+        with self.db.transaction():
+            for bucket, key, meta in updates:
+                self.put_object_metadata(bucket, key, meta)
 ```
 
-### Recommended Storage Layout for Object Storage
-- **ObjectDB**: Stores object IDs, bucket mappings, chunk maps, ETags, timestamps, and permissions.
-- **Blob Storage Layer**: Store multi-megabyte/gigabyte object payload chunks directly in dedicated chunk files on disk or raw block storage, keeping ObjectDB fast and compact.
+### Recommended Object Storage Architecture
+- **ObjectDB (Metadata Store)**: Stores bucket names, object keys, ETags, sizes, MIME types, chunk block maps, and access control policies.
+- **Blob Storage Layer (Payloads)**: Store large multi-megabyte/gigabyte object payload chunks in dedicated chunk files on disk or raw block storage, keeping the ObjectDB metadata index small, fast, and cached in memory.
 
 ---
 
-## Durability and Crash Safety
+## Concurrency, Durability, and Operating System Semantics
 
-- **Process Crash Protection**: Fully protected. Uncommitted page modifications and metadata updates are rolled back upon startup recovery.
-- **Disk Synchronization**: WAL writes and page commits invoke `os.fsync()` to request durable disk persistence.
-- **Power Loss**: On filesystems that honor barrier and `fsync` flushes, committed data survives power loss. Truncated partial writes to the WAL are detected and truncated safely during open.
-- **Orphaned Segment Bytes**: If a transaction appends bytes to a segment but aborts before committing the B+ tree index update, those appended segment bytes become unreferenced ("orphaned"). They are harmless and inaccessible through `db.get()`.
+### Single-Process Access & Locking
+- ObjectDB is designed for **single-process** operation with a single active writer.
+- When opening a database, ObjectDB acquires an exclusive file lock on `objectdb.lock` using platform-native locking (`fcntl.flock(LOCK_EX | LOCK_NB)` on POSIX systems, `msvcrt.locking` on Windows).
+- If another process attempts to open the same database directory concurrently, a `RuntimeError` is immediately raised to prevent data corruption.
 
----
+### Durability Guarantees
+- Mutations use Write-Ahead Logging (WAL) and explicit `os.fsync()` calls on data, segment, and journal descriptors before acknowledging commits.
+- Interrupted or uncommitted transactions never leak partial changes into the database index.
 
-## Current Limitations
-
-- **Single Process**: ObjectDB does not support concurrent multi-process access to the same database files.
-- **Single Active Transaction**: Nested or concurrent concurrent transactions within one database connection are not supported.
-- **Integer Keys Only**: Keys must be 64-bit signed integers (`int`). String/UUID object keys should be hashed or mapped to integer IDs.
-- **Single Segment File**: Payload records are currently stored in `segment-0.dat`. Multi-segment rotation and segment garbage collection are not yet implemented.
+### Directory Synchronization Semantics
+- ObjectDB ensures directory metadata durability (such as creating files or installing atomic backups) by synchronizing parent directories via `_sync_directory()`.
+- On POSIX platforms (Linux, macOS), directories are opened with `os.O_RDONLY` and synchronized with `os.fsync()`.
+- On platforms or filesystem drivers where directory `fsync()` is not supported (such as Windows, CIFS/SMB, or certain network filesystems that raise `EISDIR`, `EINVAL`, `ENOTSUP`, or `EOPNOTSUPP`), ObjectDB safely detects unsupported directory synchronization while strictly propagating genuine I/O or permission errors.
 
 ---
 
@@ -173,28 +214,38 @@ class S3MetadataStore:
 
 ### Running Tests
 
-Run the complete automated test suite using `pytest`:
+Run the complete test suite using `pytest`:
 
 ```bash
 pytest -v
 ```
 
-Run targeted test categories:
+Targeted test execution:
 
 ```bash
-# Run transaction and recovery suites
+# Run API smoke and integration tests
+pytest tests/test_objectdb_api.py -v
+
+# Run transaction and crash-recovery suites
 pytest tests/test_transaction_integration.py tests/test_crash_recovery_scenarios.py -v
 
-# Run public API tests
-pytest tests/test_objectdb_api.py -v
+# Run backup consistency and failure injection tests
+pytest tests/test_backup_consistency.py -v
 ```
 
-### Building the Package
+### Building Distribution Packages
+
+Build source distribution (`.tar.gz`) and binary wheel (`.whl`):
 
 ```bash
-# Build source distribution and wheel
+# Ensure build tool is installed
 python -m pip install --upgrade build
+
+# Clean and build packages
+rm -rf dist/ build/ src/*.egg-info
 python -m build
 ```
 
-Distribution packages will be generated in `dist/`.
+The resulting distribution archives will be placed in `dist/`:
+- `dist/objectdb-0.1.0-py3-none-any.whl`
+- `dist/objectdb-0.1.0.tar.gz`

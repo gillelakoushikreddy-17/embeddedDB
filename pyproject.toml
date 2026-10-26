@@ -25,5 +25,11 @@ classifiers = [
     "Topic :: Database :: Database Engines/Servers",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "build>=1.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]

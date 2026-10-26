@@ -18,6 +18,7 @@ src/objectdb/wal.py
 src/objectdb.egg-info/PKG-INFO
 src/objectdb.egg-info/SOURCES.txt
 src/objectdb.egg-info/dependency_links.txt
+src/objectdb.egg-info/requires.txt
 src/objectdb.egg-info/top_level.txt
 tests/test_adversarial_durability.py
 tests/test_allocate_page.py
