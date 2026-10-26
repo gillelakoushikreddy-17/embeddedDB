@@ -275,7 +275,11 @@ class RecoveryManager:
             elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
                 root_before_images.append(data)
 
+        incomplete_allocated_ids = {data["page_id"] for data in allocated_pages}
+
         # Restore modified pages and root page ID in reverse WAL order.
+        # Skip before-images for pages newly allocated in incomplete transactions,
+        # as those uncommitted pages will be physically reclaimed.
         for record in reversed(records):
             record_type = record.get("type")
             data = record.get("data", {})
@@ -285,8 +289,11 @@ class RecoveryManager:
                 continue
 
             if record_type == "PAGE_BEFORE_IMAGE":
+                page_id = data["page_id"]
+                if page_id in incomplete_allocated_ids:
+                    continue
                 page_writer.restore_page(
-                    data["page_id"],
+                    page_id,
                     data["original_data"],
                 )
             elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
@@ -295,7 +302,13 @@ class RecoveryManager:
                         data["original_root_page_id"],
                     )
 
-        if before_images or root_before_images:
+        # Physically reclaim uncommitted allocated pages from the database file
+        if allocated_pages and hasattr(page_writer, "reclaim_allocated_pages"):
+            page_writer.reclaim_allocated_pages(
+                [data["page_id"] for data in allocated_pages]
+            )
+
+        if before_images or root_before_images or allocated_pages:
             page_writer.sync()
 
         return {

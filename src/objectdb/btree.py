@@ -24,6 +24,16 @@ def encode_internal_node(keys, child_page_ids):
     if len(child_page_ids) != len(keys) + 1:
         raise ValueError("An internal node needs one more child than key")
 
+    key_count = len(keys)
+    required_size = (
+        INTERNAL_HEADER_SIZE
+        + key_count * KEY_SIZE
+        + (key_count + 1) * PAGE_ID_SIZE
+    )
+
+    if required_size > PAGE_SIZE:
+        raise ValueError("Internal node does not fit in one page")
+
     page = bytearray(PAGE_SIZE)
 
     struct.pack_into(
@@ -31,21 +41,15 @@ def encode_internal_node(keys, child_page_ids):
         page,
         0,
         INTERNAL_NODE_TYPE,
-        len(keys),
+        key_count,
     )
 
     offset = INTERNAL_HEADER_SIZE
+    if key_count > 0:
+        struct.pack_into(f"<{key_count}q", page, offset, *keys)
+        offset += key_count * KEY_SIZE
 
-    for key in keys:
-        struct.pack_into(KEY_FORMAT, page, offset, key)
-        offset += KEY_SIZE
-
-    for page_id in child_page_ids:
-        struct.pack_into(PAGE_ID_FORMAT, page, offset, page_id)
-        offset += PAGE_ID_SIZE
-
-    if offset > PAGE_SIZE:
-        raise ValueError("Internal node does not fit in one page")
+    struct.pack_into(f"<{key_count + 1}I", page, offset, *child_page_ids)
 
     return bytes(page)
 
@@ -71,19 +75,10 @@ def decode_internal_node(page):
         raise ValueError("Invalid internal-node key count")
 
     offset = INTERNAL_HEADER_SIZE
-    keys = []
-
-    for _ in range(key_count):
-        key = struct.unpack_from(KEY_FORMAT, page, offset)[0]
-        keys.append(key)
-        offset += KEY_SIZE
-
-    child_page_ids = []
-
-    for _ in range(key_count + 1):
-        page_id = struct.unpack_from(PAGE_ID_FORMAT, page, offset)[0]
-        child_page_ids.append(page_id)
-        offset += PAGE_ID_SIZE
+    keys = list(struct.unpack_from(f"<{key_count}q", page, offset))
+    child_page_ids = list(
+        struct.unpack_from(f"<{key_count + 1}I", page, offset + key_count * KEY_SIZE)
+    )
 
     return keys, child_page_ids
 
@@ -92,8 +87,9 @@ def encode_leaf_node(keys, records):
     if len(keys) != len(records):
         raise ValueError("Each key must have one record reference")
 
-    if keys != sorted(keys):
-        raise ValueError("Leaf keys must be sorted")
+    for i in range(len(keys) - 1):
+        if keys[i] > keys[i + 1]:
+            raise ValueError("Leaf keys must be sorted")
 
     page = bytearray(PAGE_SIZE)
 
@@ -142,18 +138,18 @@ def decode_leaf_node(page):
     keys = []
     records = []
     offset = LEAF_HEADER_SIZE
+    entry_size = KEY_SIZE + RECORD_SIZE
 
     for _ in range(key_count):
         key = struct.unpack_from(KEY_FORMAT, page, offset)[0]
         keys.append(key)
-        offset += KEY_SIZE
-
-        record = bytes(page[offset:offset + RECORD_SIZE])
+        record = bytes(page[offset + KEY_SIZE:offset + entry_size])
         records.append(record)
-        offset += RECORD_SIZE
+        offset += entry_size
 
-    if keys != sorted(keys):
-        raise ValueError("Leaf keys must be sorted")
+    for i in range(len(keys) - 1):
+        if keys[i] > keys[i + 1]:
+            raise ValueError("Leaf keys must be sorted")
 
     return keys, records
 

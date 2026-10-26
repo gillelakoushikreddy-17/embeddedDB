@@ -3,6 +3,7 @@ import shutil
 import threading
 import time
 from unittest.mock import patch
+from pathlib import Path
 import pytest
 from objectdb import ObjectDB
 
@@ -210,3 +211,71 @@ def test_restoration_from_completed_backup_validates_metadata_and_segment(tmp_pa
         assert reopened_src.get(5000) is None
     finally:
         reopened_src.close()
+
+
+def test_backup_replacement_failure_preserves_previous_valid_backup(tmp_path):
+    """
+    When replacing an existing backup, if an error occurs while moving the
+    staging directory into place, the previous valid backup is restored
+    and undamaged.
+    """
+    db_path = tmp_path / "replace_src"
+    backup_path = tmp_path / "replace_dst"
+
+    db = ObjectDB(db_path)
+    db.open()
+    db.put(1, b"initial_backup_val")
+    db.backup(backup_path)
+
+    # Verify initial backup is valid
+    b1 = ObjectDB(backup_path)
+    b1.open()
+    assert b1.get(1) == b"initial_backup_val"
+    b1.close()
+
+    # Modify source db
+    db.put(2, b"new_val")
+
+    # Inject failure during the rename of staging_dir -> target_path
+    real_rename = Path.rename
+
+    def failing_rename(self, target):
+        # Fail specifically when target == backup_path and self is a staging dir
+        if Path(target) == backup_path and ".tmp_backup_" in str(self):
+            raise OSError("Injected filesystem error during staging rename")
+        return real_rename(self, target)
+
+    with patch.object(Path, "rename", side_effect=failing_rename, autospec=True):
+        with pytest.raises(OSError, match="Injected filesystem error during staging rename"):
+            db.backup(backup_path)
+
+    # Verify that the previous backup at backup_path is STILL INTACT and VALID!
+    assert backup_path.exists()
+    b2 = ObjectDB(backup_path)
+    b2.open()
+    try:
+        assert b2.check_integrity()["valid"] is True
+        assert b2.get(1) == b"initial_backup_val"
+        assert b2.get(2) is None  # new_val was not backed up
+    finally:
+        b2.close()
+
+    # Verify no temporary directories leaked
+    leftover_tmp = [
+        p.name for p in tmp_path.iterdir()
+        if p.name.startswith(".tmp_backup_") or p.name.startswith(".old_backup_")
+    ]
+    assert leftover_tmp == []
+
+    # Verify that a subsequent backup succeeds normally
+    db.backup(backup_path)
+    b3 = ObjectDB(backup_path)
+    b3.open()
+    try:
+        assert b3.get(1) == b"initial_backup_val"
+        assert b3.get(2) == b"new_val"
+    finally:
+        b3.close()
+
+    db.close()
+

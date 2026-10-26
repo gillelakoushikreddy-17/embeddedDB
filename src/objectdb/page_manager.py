@@ -131,3 +131,37 @@ class PageManager:
         if hasattr(self.file, "fileno"):
             os.fsync(self.file.fileno())
 
+    @property
+    def page_count(self):
+        if self.file is None:
+            raise RuntimeError("Database file is not open")
+        self.file.seek(0, 2)
+        return self.file.tell() // PAGE_SIZE
+
+    def reclaim_allocated_pages(self, page_ids):
+        """
+        Reclaim pages allocated at the tail of the database file.
+        Candidate pages are inspected in descending order; trailing uncommitted
+        pages are truncated from the database file and fsynced.
+        """
+        if self.file is None:
+            raise RuntimeError("Database file is not open")
+
+        self.file.seek(0, 2)
+        file_size = self.file.tell()
+        current_page_count = file_size // PAGE_SIZE
+
+        # Sort candidate page IDs in descending order
+        for page_id in sorted(set(page_ids), reverse=True):
+            if page_id == current_page_count - 1 and page_id > 0:
+                current_page_count -= 1
+
+        target_size = current_page_count * PAGE_SIZE
+        if target_size < file_size:
+            self.file.seek(target_size)
+            self.file.truncate()
+            self.file.flush()
+            if hasattr(self.file, "fileno"):
+                os.fsync(self.file.fileno())
+
+

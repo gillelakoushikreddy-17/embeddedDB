@@ -542,10 +542,13 @@ class ObjectDB:
         """
         Atomically copy database files via a temporary staging directory,
         sync files and directory, and ensure no partial backup is left on error.
+        If replacing an existing backup, safely preserve the existing backup until
+        the new backup is confirmed in place.
         """
         target_path.parent.mkdir(parents=True, exist_ok=True)
         staging_dir = target_path.parent / f".tmp_backup_{uuid.uuid4().hex}"
         staging_dir.mkdir(parents=True, exist_ok=True)
+        old_backup_dir = None
 
         try:
             for filename in ("objectdb.data", "segment-0.dat", "objectdb.wal"):
@@ -566,11 +569,26 @@ class ObjectDB:
             except (OSError, AttributeError):
                 pass
 
-            # If target_path exists, remove it cleanly before replacement
+            # If target_path exists, preserve it in a temporary backup location first
             if target_path.exists():
-                shutil.rmtree(target_path)
+                old_backup_dir = target_path.parent / f".old_backup_{uuid.uuid4().hex}"
+                target_path.rename(old_backup_dir)
 
-            staging_dir.rename(target_path)
+            try:
+                staging_dir.rename(target_path)
+            except Exception:
+                # Restore previous valid backup if renaming staging failed
+                if old_backup_dir is not None and old_backup_dir.exists():
+                    try:
+                        old_backup_dir.rename(target_path)
+                    except Exception:
+                        pass
+                raise
+            else:
+                # Backup replacement succeeded: clean up previous backup
+                if old_backup_dir is not None and old_backup_dir.exists():
+                    shutil.rmtree(old_backup_dir, ignore_errors=True)
+                    old_backup_dir = None
 
             # Sync target parent directory
             try:
@@ -585,6 +603,8 @@ class ObjectDB:
         finally:
             if staging_dir.exists():
                 shutil.rmtree(staging_dir, ignore_errors=True)
+            if old_backup_dir is not None and old_backup_dir.exists():
+                shutil.rmtree(old_backup_dir, ignore_errors=True)
 
     def close(self):
         if not self.is_open:
@@ -713,6 +733,8 @@ class _DatabaseTransactionContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
+            if not self.db.is_open or self.db.page_manager is None:
+                return
             if exc_type is not None:
                 if self.tx.state == TransactionState.ACTIVE and not getattr(self.db.wal, "_is_broken", False):
                     try:
@@ -720,8 +742,9 @@ class _DatabaseTransactionContext:
                     except Exception:
                         self.db.is_poisoned = True
                     finally:
-                        header = read_header(self.db.page_manager.read_page(0))
-                        self.db.tree.root_page_id = header["root_page_id"]
+                        if self.db.page_manager is not None:
+                            header = read_header(self.db.page_manager.read_page(0))
+                            self.db.tree.root_page_id = header["root_page_id"]
                 else:
                     self.db.is_poisoned = True
             else:
@@ -732,7 +755,8 @@ class _DatabaseTransactionContext:
                 self.db.is_poisoned = True
             raise
         finally:
-            self.db.tree.page_manager = self.old_adapter
+            if self.db.tree is not None:
+                self.db.tree.page_manager = self.old_adapter
             self.db._active_transaction = None
             if self._lock_acquired:
                 self.db._mutation_lock.release()

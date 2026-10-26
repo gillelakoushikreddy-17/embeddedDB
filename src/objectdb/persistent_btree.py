@@ -1,4 +1,5 @@
 
+import bisect
 import struct
 
 from objectdb.btree import (
@@ -90,26 +91,19 @@ class PersistentBTree:
         page = self.page_manager.read_page(leaf_page_id)
         keys, records = decode_leaf_node(page)
 
-        # Update an existing key.
-        if key in keys:
-            records[keys.index(key)] = record
+        # Update an existing key using binary search.
+        idx = bisect.bisect_left(keys, key)
+        if idx < len(keys) and keys[idx] == key:
+            records[idx] = record
             self.page_manager.write_page(
                 leaf_page_id,
                 encode_leaf_node(keys, records),
             )
             return
 
-        # Insert the new key and its record.
-        keys.append(key)
-        records.append(record)
-
-        # Keep keys and records sorted together.
-        sorted_items = sorted(
-            zip(keys, records),
-            key=lambda item: item[0],
-        )
-        keys = [item[0] for item in sorted_items]
-        records = [item[1] for item in sorted_items]
+        # Insert the new key and its record at the sorted position.
+        keys.insert(idx, key)
+        records.insert(idx, record)
 
         # No split is needed if the leaf still has enough space.
         if len(keys) <= self._leaf_capacity():
@@ -181,8 +175,9 @@ class PersistentBTree:
         keys, records = decode_leaf_node(leaf_page)
 
         # Return the matching record, or None if absent.
-        if key in keys:
-            return records[keys.index(key)]
+        idx = bisect.bisect_left(keys, key)
+        if idx < len(keys) and keys[idx] == key:
+            return records[idx]
 
         return None
 
@@ -199,16 +194,16 @@ class PersistentBTree:
         keys, records = decode_leaf_node(leaf_page)
 
         # If the key doesn't exist, nothing needs to be deleted.
-        if key not in keys:
+        idx = bisect.bisect_left(keys, key)
+        if idx >= len(keys) or keys[idx] != key:
             return False
 
         # Remember whether we're deleting the first key.
-        index = keys.index(key)
-        deleted_first_key = index == 0
+        deleted_first_key = idx == 0
 
         # Remove the key and its corresponding record.
-        keys.pop(index)
-        records.pop(index)
+        keys.pop(idx)
+        records.pop(idx)
 
         # Write the updated leaf back to disk.
         updated_page = encode_leaf_node(keys, records)
@@ -276,15 +271,8 @@ class PersistentBTree:
 
             keys, child_page_ids = decode_internal_node(page)
 
-            # Select the correct child.
-            child_index = 0
-
-            while (
-                    child_index < len(keys)
-                    and key >= keys[child_index]
-            ):
-                child_index += 1
-
+            # Select the correct child using binary search.
+            child_index = bisect.bisect_right(keys, key)
             page_id = child_page_ids[child_index]
 
     def _find_parent_page(self, child_page_id):

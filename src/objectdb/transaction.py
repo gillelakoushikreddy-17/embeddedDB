@@ -103,14 +103,25 @@ class Transaction:
                 == self.transaction_id
             ]
 
-            # Restore the most recent before-images first.
+            # Identify newly allocated pages in this transaction
+            allocated_page_ids = [
+                record.get("data", {}).get("page_id")
+                for record in tx_records
+                if record.get("type") == "PAGE_ALLOCATED"
+            ]
+            allocated_ids_set = set(allocated_page_ids)
+
+            # Restore the most recent before-images first (skipping newly allocated pages).
             for record in reversed(tx_records):
                 record_type = record.get("type")
                 record_data = record.get("data", {})
 
                 if record_type == "PAGE_BEFORE_IMAGE":
+                    page_id = record_data["page_id"]
+                    if page_id in allocated_ids_set:
+                        continue
                     self.page_writer.restore_page(
-                        record_data["page_id"],
+                        page_id,
                         record_data["original_data"],
                     )
                 elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
@@ -118,6 +129,10 @@ class Transaction:
                         self.page_writer.restore_root_page_id(
                             record_data["original_root_page_id"],
                         )
+
+            # Reclaim pages allocated by this rolled-back transaction
+            if allocated_page_ids and hasattr(self.page_writer, "reclaim_allocated_pages"):
+                self.page_writer.reclaim_allocated_pages(allocated_page_ids)
 
             # Ensure restored pages are durable before recording rollback.
             self.page_writer.sync()

@@ -160,3 +160,9 @@ class TransactionalPageWriter:
         """Make database page changes durable."""
         self.page_manager.sync()
 
+    def reclaim_allocated_pages(self, page_ids):
+        """Reclaim uncommitted allocated pages from the underlying page manager."""
+        if hasattr(self.page_manager, "reclaim_allocated_pages"):
+            self.page_manager.reclaim_allocated_pages(page_ids)
+
+
