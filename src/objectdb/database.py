@@ -1,8 +1,10 @@
+import errno
 import fcntl
 import os
 from pathlib import Path
 import shutil
 import struct
+import sys
 import threading
 import uuid
 
@@ -20,6 +22,54 @@ MIN_KEY = -9223372036854775808
 MAX_KEY = 9223372036854775807
 
 _ACTIVE_INSTANCES = {}
+
+_UNSUPPORTED_DIR_SYNC_ERRNOS = {
+    errno.EINVAL,
+    errno.ENOTSUP,
+    getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+    errno.ENOSYS,
+}
+if sys.platform == "win32" or os.name == "nt":
+    _UNSUPPORTED_DIR_SYNC_ERRNOS.add(errno.EACCES)
+    _UNSUPPORTED_DIR_SYNC_ERRNOS.add(errno.EPERM)
+    _UNSUPPORTED_DIR_SYNC_ERRNOS.add(errno.EBADF)
+
+
+def _sync_directory(dir_path: Path) -> bool:
+    """
+    Synchronize directory metadata to disk using fsync().
+
+    Returns True if directory synchronization succeeded.
+    Returns False if directory synchronization is unsupported on this platform or filesystem.
+    Raises OSError if a genuine filesystem/hardware I/O error occurs.
+    """
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+
+    try:
+        dir_fd = os.open(dir_path, flags)
+    except AttributeError:
+        return False
+    except OSError as err:
+        if err.errno in _UNSUPPORTED_DIR_SYNC_ERRNOS:
+            return False
+        raise
+
+    try:
+        os.fsync(dir_fd)
+        return True
+    except AttributeError:
+        return False
+    except OSError as err:
+        if err.errno in _UNSUPPORTED_DIR_SYNC_ERRNOS:
+            return False
+        raise
+    finally:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
 
 
 def _remove_path(path: Path):
@@ -505,6 +555,14 @@ class ObjectDB:
         Create a durable, consistent copy of the database files in target_directory.
         Blocks concurrent write operations for the duration of the backup.
         Supports backing up either an open, idle database or a closed database.
+
+        Durability guarantees:
+        All copied database files (data pages, record segments, WAL) are synchronously
+        flushed and synced to disk via fsync(). On platforms supporting directory fsync
+        (Linux, macOS), directory metadata and directory renames are also synced. On
+        platforms or filesystems without directory fsync support (e.g. Windows, FAT/exFAT),
+        file contents are fully durable but directory entry persistence depends on OS
+        writeback. Genuine filesystem I/O errors are raised to avoid falsely claiming durability.
         """
         target_path = Path(target_directory)
         if target_path.resolve() == self.path.resolve():
@@ -559,7 +617,13 @@ class ObjectDB:
         Atomically copy database files via a temporary staging directory,
         sync files and directory, and ensure no partial backup is left on error.
         If replacing an existing backup, safely preserve the existing backup until
-        the new backup is confirmed in place.
+        the new backup is confirmed in place and durably synchronized.
+
+        Note on platform durability:
+        On platforms or filesystems that do not support directory synchronization
+        (e.g. Windows, FAT/exFAT, or network filesystems without directory fsync support),
+        file contents are synchronized via fsync() but directory metadata cannot be fsynced.
+        On such platforms, directory entry durability depends on OS writeback guarantees.
         """
         target_path.parent.mkdir(parents=True, exist_ok=True)
         staging_dir = target_path.parent / f".tmp_backup_{uuid.uuid4().hex}"
@@ -575,15 +639,8 @@ class ObjectDB:
                     with open(dst_file, "r+b") as fp:
                         os.fsync(fp.fileno())
 
-            # Sync staging directory metadata
-            try:
-                dir_fd = os.open(staging_dir, os.O_RDONLY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            except (OSError, AttributeError):
-                pass
+            # Durability step: synchronize staging directory metadata
+            _sync_directory(staging_dir)
 
             # If target_path exists, preserve it in a temporary backup location first
             if target_path.exists():
@@ -592,33 +649,40 @@ class ObjectDB:
 
             try:
                 staging_dir.rename(target_path)
+                # Durability step: synchronize parent directory to record the rename on disk
+                _sync_directory(target_path.parent)
             except Exception as replace_err:
                 restore_err = None
-                # Restore previous valid backup if renaming staging failed
+                # Restore previous valid backup if installing replacement failed or could not be made durable
                 if old_backup_dir is not None and old_backup_dir.exists():
                     try:
+                        # Clean up target_path if it was partially created/renamed by staging_dir.rename
+                        # before directory sync failed, avoiding directory not empty collisions
+                        if target_path.exists():
+                            _remove_path(target_path)
                         old_backup_dir.rename(target_path)
+                        try:
+                            _sync_directory(target_path.parent)
+                        except Exception:
+                            pass
                         old_backup_dir = None
                     except Exception as err:
                         restore_err = err
+                else:
+                    # Fresh backup installation failed (e.g. parent directory sync failed after rename).
+                    # Clean up target_path so we do not leave an un-durable backup claimed as complete.
+                    if target_path.exists():
+                        _remove_path(target_path)
+
                 if restore_err is not None:
                     raise replace_err from restore_err
                 raise
             else:
-                # Backup replacement succeeded: clean up previous backup
+                # Replacement succeeded AND all required durability steps completed:
+                # Safe to clean up previous backup
                 if old_backup_dir is not None and old_backup_dir.exists():
                     _remove_path(old_backup_dir)
                     old_backup_dir = None
-
-            # Sync target parent directory
-            try:
-                parent_fd = os.open(target_path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(parent_fd)
-                finally:
-                    os.close(parent_fd)
-            except (OSError, AttributeError):
-                pass
 
         finally:
             if staging_dir.exists():

@@ -1,3 +1,4 @@
+import errno
 import os
 import shutil
 import threading
@@ -6,6 +7,7 @@ from unittest.mock import patch
 from pathlib import Path
 import pytest
 from objectdb import ObjectDB
+from objectdb import database
 
 
 def test_backup_of_idle_database(tmp_path):
@@ -381,5 +383,196 @@ def test_backup_replacement_and_restoration_double_failure_preserves_old_backup(
     assert leftover == []
 
     db.close()
+
+
+def test_backup_staging_dir_fsync_genuine_io_failure_propagates_and_cleans_up(tmp_path):
+    """
+    If a genuine filesystem I/O error occurs while syncing the staging directory metadata,
+    the error must propagate, the backup is not claimed to be complete,
+    and staging files are cleaned up without damaging the source database.
+    """
+    db_path = tmp_path / "sync_fail_src"
+    backup_path = tmp_path / "sync_fail_dst"
+
+    db = ObjectDB(db_path)
+    db.open()
+    db.put(1, b"val1")
+
+    # Injected genuine I/O error when fsyncing staging directory
+    io_err = OSError(errno.EIO, "Simulated disk hardware I/O error on staging dir")
+
+    original_sync = database._sync_directory
+
+    def failing_sync(path):
+        if ".tmp_backup_" in str(path):
+            raise io_err
+        return original_sync(path)
+
+    with patch("objectdb.database._sync_directory", side_effect=failing_sync):
+        with pytest.raises(OSError, match="Simulated disk hardware I/O error") as exc_info:
+            db.backup(backup_path)
+        assert exc_info.value is io_err
+
+    # Target path was never created
+    assert not backup_path.exists()
+
+    # Staging directory must be cleaned up
+    staging_dirs = [p for p in tmp_path.iterdir() if p.name.startswith(".tmp_backup_")]
+    assert staging_dirs == []
+
+    # Source database must remain intact
+    assert db.get(1) == b"val1"
+    assert db.check_integrity()["valid"] is True
+    db.close()
+
+
+def test_backup_parent_dir_fsync_genuine_io_failure_restores_previous_valid_backup(tmp_path):
+    """
+    When replacing an existing backup, if a genuine I/O failure occurs while syncing
+    the target parent directory, the failure propagates, the replacement is aborted,
+    and the previous valid backup is restored to target_path.
+    """
+    db_path = tmp_path / "parent_sync_src"
+    backup_path = tmp_path / "parent_sync_dst"
+
+    db = ObjectDB(db_path)
+    db.open()
+    db.put(1, b"original_backup_payload")
+    db.backup(backup_path)
+
+    # Verify initial backup
+    b1 = ObjectDB(backup_path)
+    b1.open()
+    assert b1.get(1) == b"original_backup_payload"
+    b1.close()
+
+    # Mutate source database
+    db.put(2, b"new_mutation_payload")
+
+    io_err = OSError(errno.EIO, "Disk I/O error syncing parent directory")
+
+    original_sync = database._sync_directory
+
+    def failing_parent_sync(path):
+        if Path(path) == backup_path.parent:
+            raise io_err
+        return original_sync(path)
+
+    with patch("objectdb.database._sync_directory", side_effect=failing_parent_sync):
+        with pytest.raises(OSError, match="Disk I/O error syncing parent directory") as exc_info:
+            db.backup(backup_path)
+        assert exc_info.value is io_err
+
+    # Verify previous backup is restored at backup_path and completely intact
+    assert backup_path.exists()
+    b_restored = ObjectDB(backup_path)
+    b_restored.open()
+    try:
+        assert b_restored.check_integrity()["valid"] is True
+        assert b_restored.get(1) == b"original_backup_payload"
+        assert b_restored.get(2) is None  # new_mutation_payload was rejected due to sync failure
+    finally:
+        b_restored.close()
+
+    # Verify no temporary directories leaked
+    leftover = [
+        p.name for p in tmp_path.iterdir()
+        if p.name.startswith(".tmp_backup_") or p.name.startswith(".old_backup_")
+    ]
+    assert leftover == []
+    db.close()
+
+
+def test_backup_directory_sync_unsupported_platform_succeeds_gracefully(tmp_path):
+    """
+    On platforms or filesystems where directory fsync is unsupported (e.g. Windows, FAT/exFAT,
+    returning EINVAL or ENOTSUP), backup() succeeds gracefully without raising,
+    while file data contents remain fully durable.
+    """
+    db_path = tmp_path / "unsupported_sync_src"
+    backup_path = tmp_path / "unsupported_sync_dst"
+
+    db = ObjectDB(db_path)
+    db.open()
+    for i in range(10):
+        db.put(i, f"payload_{i}".encode())
+
+    # Simulate platform returning EINVAL or ENOTSUP on directory open/fsync
+    def unsupported_sync(path):
+        return False
+
+    with patch("objectdb.database._sync_directory", side_effect=unsupported_sync):
+        res = db.backup(backup_path)
+        assert res == backup_path
+
+    # Verify backup is valid and intact
+    b = ObjectDB(backup_path)
+    b.open()
+    try:
+        assert b.check_integrity()["valid"] is True
+        for i in range(10):
+            assert b.get(i) == f"payload_{i}".encode()
+    finally:
+        b.close()
+        db.close()
+
+
+def test_backup_parent_dir_fsync_failure_with_restoration_failure_preserves_old_backup(tmp_path):
+    """
+    When replacing a backup, if parent directory sync fails AND restoration rename fails:
+    1. Both the sync error and restoration error are reported via exception chaining.
+    2. The previous valid backup is NOT deleted and is preserved in .old_backup_<uuid>.
+    3. The preserved backup remains functional and valid.
+    """
+    db_path = tmp_path / "double_sync_fail_src"
+    backup_path = tmp_path / "double_sync_dst"
+
+    db = ObjectDB(db_path)
+    db.open()
+    db.put(1, b"critical_old_backup")
+    db.backup(backup_path)
+
+    # Mutate source database
+    db.put(2, b"new_data")
+
+    sync_err = OSError(errno.EIO, "I/O error during parent directory sync")
+    restore_rename_err = OSError(errno.EIO, "I/O error restoring old backup directory")
+
+    original_sync = database._sync_directory
+    original_rename = Path.rename
+
+    def failing_sync(path):
+        if Path(path) == backup_path.parent:
+            raise sync_err
+        return original_sync(path)
+
+    def failing_rename(self, target):
+        if Path(target) == backup_path and ".old_backup_" in str(self):
+            raise restore_rename_err
+        return original_rename(self, target)
+
+    with patch("objectdb.database._sync_directory", side_effect=failing_sync):
+        with patch.object(Path, "rename", side_effect=failing_rename, autospec=True):
+            with pytest.raises(OSError, match="I/O error during parent directory sync") as exc_info:
+                db.backup(backup_path)
+
+            assert exc_info.value is sync_err
+            assert exc_info.value.__cause__ is restore_rename_err
+
+    # The old backup MUST NOT have been deleted!
+    old_backups = [p for p in tmp_path.iterdir() if p.name.startswith(".old_backup_")]
+    assert len(old_backups) == 1
+    preserved_backup = old_backups[0]
+
+    b_preserved = ObjectDB(preserved_backup)
+    b_preserved.open()
+    try:
+        assert b_preserved.check_integrity()["valid"] is True
+        assert b_preserved.get(1) == b"critical_old_backup"
+        assert b_preserved.get(2) is None
+    finally:
+        b_preserved.close()
+        db.close()
+
 
 
