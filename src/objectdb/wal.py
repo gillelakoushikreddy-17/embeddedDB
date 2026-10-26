@@ -11,13 +11,13 @@ class WriteAheadLog:
         self.file_path = Path(file_path)
         self.file = None
         self.next_lsn = 1
-
-
+        self._is_broken = False
 
     def open(self):
         """Open the WAL, discard a truncated final record, and find the next LSN."""
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self.file = open(self.file_path, "a+b")
+        self._is_broken = False
 
         try:
             self.file.seek(0)
@@ -35,9 +35,9 @@ class WriteAheadLog:
                     self.file.seek(line_start)
                     self.file.truncate()
                     self.file.flush()
-                    os.fsync(self.file.fileno())
+                    if hasattr(self.file, "fileno"):
+                        os.fsync(self.file.fileno())
                     break
-
 
                 try:
                     record = json.loads(line.decode("utf-8"))
@@ -45,7 +45,6 @@ class WriteAheadLog:
                     raise ValueError(
                         "WAL contains an invalid record"
                     ) from exc
-
 
                 if not isinstance(record, dict):
                     raise ValueError("WAL contains an invalid record")
@@ -82,16 +81,20 @@ class WriteAheadLog:
             self.file = None
             raise
 
-
-
     def append(self, record_type, data):
         """Append a record and return its LSN."""
         if self.file is None:
             raise RuntimeError("WAL is not open")
 
+        if self._is_broken:
+            raise RuntimeError(
+                "WAL is in a broken/uncertain state due to an append failure; reopen database to recover"
+            )
+
         if not isinstance(record_type, str) or not record_type:
             raise ValueError("record_type must be a non-empty string")
 
+        self._current_record_type = record_type
         lsn = self.next_lsn
 
         record = {
@@ -112,25 +115,42 @@ class WriteAheadLog:
 
         try:
             self.file.write(encoded)
-            # Flush Python's buffer and request OS-level synchronization.
             self.file.flush()
-            if hasattr(self.file, "fileno"):
-                os.fsync(self.file.fileno())
-            self.next_lsn += 1
-            return lsn
-        except Exception:
+        except Exception as write_exc:
+            self._is_broken = True
+            cleanup_exc = None
             try:
                 self.file.seek(start_pos)
                 self.file.truncate()
                 self.file.flush()
-            except Exception:
-                pass
-            raise
+            except Exception as e:
+                cleanup_exc = e
+
+            if cleanup_exc is not None:
+                raise write_exc from cleanup_exc
+            raise write_exc
+
+        try:
+            if hasattr(self.file, "fileno"):
+                os.fsync(self.file.fileno())
+            self.next_lsn += 1
+            return lsn
+        except Exception as sync_exc:
+            # Data was written and flushed to the OS.
+            # An fsync error does not prove data was not persisted to disk.
+            # Truncating after an fsync error is unsafe; mark broken and fail closed.
+            self._is_broken = True
+            raise sync_exc
 
     def read_all(self):
         """Read all valid WAL records in LSN order."""
         if self.file is None:
             raise RuntimeError("WAL is not open")
+
+        if self._is_broken:
+            raise RuntimeError(
+                "WAL is in a broken/uncertain state due to an append failure; reopen database to recover"
+            )
 
         self.file.flush()
         self.file.seek(0)
@@ -159,3 +179,4 @@ class WriteAheadLog:
         if self.file is not None:
             self.file.close()
             self.file = None
+        self._is_broken = False

@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import shutil
 import struct
+import threading
+import uuid
 
 from objectdb.header import NO_ROOT_PAGE, create_header, read_header
 from objectdb.page_manager import PAGE_SIZE, PageManager
@@ -42,6 +44,7 @@ class ObjectDB:
         self.is_poisoned = False
         self._active_transaction = None
         self._lock_fp = None
+        self._mutation_lock = threading.RLock()
 
     def __enter__(self):
         if not self.is_open:
@@ -65,8 +68,8 @@ class ObjectDB:
             raise RuntimeError("Database is already open")
 
         self.path.mkdir(parents=True, exist_ok=True)
-
         canonical_path = str(self.path.resolve())
+
         existing = _ACTIVE_INSTANCES.get(canonical_path)
         if existing is not None and existing is not self:
             if existing.is_open:
@@ -81,36 +84,44 @@ class ObjectDB:
                     pass
                 existing._lock_fp = None
 
-        # Acquire an exclusive advisory process lock on objectdb.lock.
-        lock_file = self.path / "objectdb.lock"
-        lock_fp = open(lock_file, "a+b")
-        try:
-            fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (BlockingIOError, OSError) as exc:
-            lock_fp.close()
-            raise RuntimeError("Database is locked by another process") from exc
-
-        self._lock_fp = lock_fp
-        _ACTIVE_INSTANCES[canonical_path] = self
-
-        db_file = self.path / "objectdb.data"
-        segment_file = self.path / "segment-0.dat"
-        wal_file = self.path / "objectdb.wal"
-
-        if not db_file.exists():
-            manager = PageManager(db_file)
-            manager.initialize()
-
-        manager = PageManager(db_file)
-        manager.open()
-
-        wal = WriteAheadLog(wal_file)
+        # Track acquired resources for clean failure rollback
+        lock_fp = None
+        manager = None
+        wal = None
         segment = None
+        registered = False
 
         try:
+            # 1. Acquire an exclusive advisory process lock on objectdb.lock.
+            lock_file = self.path / "objectdb.lock"
+            lock_fp = open(lock_file, "a+b")
+            try:
+                fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (BlockingIOError, OSError) as exc:
+                lock_fp.close()
+                lock_fp = None
+                raise RuntimeError("Database is locked by another process") from exc
+
+            self._lock_fp = lock_fp
+            _ACTIVE_INSTANCES[canonical_path] = self
+            registered = True
+
+            # 2. Page Manager initialization
+            db_file = self.path / "objectdb.data"
+            segment_file = self.path / "segment-0.dat"
+            wal_file = self.path / "objectdb.wal"
+
+            if not db_file.exists():
+                init_manager = PageManager(db_file)
+                init_manager.initialize()
+
+            manager = PageManager(db_file)
+            manager.open()
+
+            # 3. WAL open and recovery
+            wal = WriteAheadLog(wal_file)
             wal.open()
 
-            # Recover incomplete transactions before loading the tree.
             page_writer = TransactionalPageWriter(manager, wal)
             recovery = RecoveryManager(wal)
             recovery.recover(page_writer)
@@ -119,29 +130,52 @@ class ObjectDB:
             existing_tx_ids = set(analysis["transactions"].keys())
             self.next_transaction_id = max(existing_tx_ids, default=0) + 1
 
+            # 4. Tree load or creation
             tree = PersistentBTree(manager)
-
             try:
                 tree.load_existing_tree()
             except ValueError as exc:
                 header = read_header(manager.read_page(0))
-
                 if header["root_page_id"] != NO_ROOT_PAGE:
                     raise exc
-
                 tree.create_empty_tree()
 
+            # 5. Segment open
             segment = Segment(segment_file)
             segment.open()
 
-        except Exception:
+            # Successfully initialized
+            self.page_manager = manager
+            self.tree = tree
+            self.segment = segment
+            self.wal = wal
+            self.page_writer = page_writer
+            self.is_open = True
+            self.is_poisoned = False
+
+        except BaseException as orig_exc:
+            # Clean up all acquired resources in reverse order without masking orig_exc
+            if registered and _ACTIVE_INSTANCES.get(canonical_path) is self:
+                _ACTIVE_INSTANCES.pop(canonical_path, None)
+
             if segment is not None:
                 try:
                     segment.close()
                 except Exception:
                     pass
-            manager.close()
-            wal.close()
+
+            if wal is not None:
+                try:
+                    wal.close()
+                except Exception:
+                    pass
+
+            if manager is not None:
+                try:
+                    manager.close()
+                except Exception:
+                    pass
+
             if self._lock_fp is not None:
                 try:
                     fcntl.flock(self._lock_fp.fileno(), fcntl.LOCK_UN)
@@ -149,15 +183,22 @@ class ObjectDB:
                 except Exception:
                     pass
                 self._lock_fp = None
-            raise
+            elif lock_fp is not None:
+                try:
+                    fcntl.flock(lock_fp.fileno(), fcntl.LOCK_UN)
+                    lock_fp.close()
+                except Exception:
+                    pass
 
-        self.page_manager = manager
-        self.tree = tree
-        self.segment = segment
-        self.wal = wal
-        self.page_writer = page_writer
-        self.is_open = True
-        self.is_poisoned = False
+            self.page_manager = None
+            self.tree = None
+            self.segment = None
+            self.wal = None
+            self.page_writer = None
+            self.is_open = False
+            self.is_poisoned = False
+
+            raise orig_exc
 
     def _begin_transaction(self):
         from objectdb.transaction import Transaction
@@ -177,71 +218,79 @@ class ObjectDB:
         if not isinstance(value, bytes):
             raise TypeError("Value must be bytes")
 
-        if self._active_transaction is not None:
-            # Durability Ordering: payload is appended and flushed/synced to disk
-            offset, size = self.segment.append(value)
-            self.segment.sync()
-            record = encode_record(0, offset, size)
-            self.tree.insert_into_root(key, record)
-            return
+        with self._mutation_lock:
+            if self._active_transaction is not None:
+                # Durability Ordering: payload is appended and flushed/synced to disk
+                offset, size = self.segment.append(value)
+                self.segment.sync()
+                record = encode_record(0, offset, size)
+                self.tree.insert_into_root(key, record)
+                return
 
-        tx = self._begin_transaction()
-        adapter = TransactionPageAdapter(tx, self.page_manager, self.tree)
-        old_adapter = self.tree.page_manager
-        self.tree.page_manager = adapter
+            tx = None
+            old_adapter = self.tree.page_manager
+            try:
+                tx = self._begin_transaction()
+                adapter = TransactionPageAdapter(tx, self.page_manager, self.tree)
+                self.tree.page_manager = adapter
 
-        try:
-            # Durability Ordering:
-            # 1. Append payload to segment
-            # 2. Flush & fsync segment payload before recording index entry
-            # 3. Apply metadata changes through transaction-aware B+ tree
-            # 4. Flush & fsync pages & append COMMIT record in tx.commit()
-            offset, size = self.segment.append(value)
-            self.segment.sync()
-            record = encode_record(0, offset, size)
-            self.tree.insert_into_root(key, record)
-            tx.commit()
-        except Exception:
-            if tx.state == TransactionState.ACTIVE:
-                try:
-                    tx.rollback()
-                finally:
-                    header = read_header(self.page_manager.read_page(0))
-                    self.tree.root_page_id = header["root_page_id"]
-            else:
-                self.is_poisoned = True
-            raise
-        finally:
-            self.tree.page_manager = old_adapter
+                # Durability Ordering:
+                # 1. Append payload to segment
+                # 2. Flush & fsync segment payload before recording index entry
+                # 3. Apply metadata changes through transaction-aware B+ tree
+                # 4. Flush & fsync pages & append COMMIT record in tx.commit()
+                offset, size = self.segment.append(value)
+                self.segment.sync()
+                record = encode_record(0, offset, size)
+                self.tree.insert_into_root(key, record)
+                tx.commit()
+            except Exception:
+                if tx is not None and tx.state == TransactionState.ACTIVE and not getattr(self.wal, "_is_broken", False):
+                    try:
+                        tx.rollback()
+                    except Exception:
+                        self.is_poisoned = True
+                    finally:
+                        header = read_header(self.page_manager.read_page(0))
+                        self.tree.root_page_id = header["root_page_id"]
+                else:
+                    self.is_poisoned = True
+                raise
+            finally:
+                self.tree.page_manager = old_adapter
 
     def delete(self, key: int) -> bool:
         self._ensure_open()
         _validate_key(key)
 
-        if self._active_transaction is not None:
-            return self.tree.delete(key)
+        with self._mutation_lock:
+            if self._active_transaction is not None:
+                return self.tree.delete(key)
 
-        tx = self._begin_transaction()
-        adapter = TransactionPageAdapter(tx, self.page_manager, self.tree)
-        old_adapter = self.tree.page_manager
-        self.tree.page_manager = adapter
+            tx = None
+            old_adapter = self.tree.page_manager
+            try:
+                tx = self._begin_transaction()
+                adapter = TransactionPageAdapter(tx, self.page_manager, self.tree)
+                self.tree.page_manager = adapter
 
-        try:
-            deleted = self.tree.delete(key)
-            tx.commit()
-            return deleted
-        except Exception:
-            if tx.state == TransactionState.ACTIVE:
-                try:
-                    tx.rollback()
-                finally:
-                    header = read_header(self.page_manager.read_page(0))
-                    self.tree.root_page_id = header["root_page_id"]
-            else:
-                self.is_poisoned = True
-            raise
-        finally:
-            self.tree.page_manager = old_adapter
+                deleted = self.tree.delete(key)
+                tx.commit()
+                return deleted
+            except Exception:
+                if tx is not None and tx.state == TransactionState.ACTIVE and not getattr(self.wal, "_is_broken", False):
+                    try:
+                        tx.rollback()
+                    except Exception:
+                        self.is_poisoned = True
+                    finally:
+                        header = read_header(self.page_manager.read_page(0))
+                        self.tree.root_page_id = header["root_page_id"]
+                else:
+                    self.is_poisoned = True
+                raise
+            finally:
+                self.tree.page_manager = old_adapter
 
     def get(self, key: int):
         self._ensure_open()
@@ -438,41 +487,112 @@ class ObjectDB:
     def backup(self, target_directory: str | Path) -> Path:
         """
         Create a durable, consistent copy of the database files in target_directory.
+        Blocks concurrent write operations for the duration of the backup.
+        Supports backing up either an open, idle database or a closed database.
         """
-        self._ensure_open()
-        if self._active_transaction is not None:
-            raise RuntimeError("Cannot perform backup during an active transaction")
-
         target_path = Path(target_directory)
         if target_path.resolve() == self.path.resolve():
             raise ValueError(
                 "Target backup directory cannot be the same as the database directory"
             )
 
-        target_path.mkdir(parents=True, exist_ok=True)
+        if self.is_open:
+            if self.is_poisoned:
+                raise RuntimeError(
+                    "Database is in a poisoned state; cannot perform backup"
+                )
+            if self._active_transaction is not None:
+                raise RuntimeError("Cannot perform backup during an active transaction")
 
-        # Flush & sync all active data to disk
-        self.segment.sync()
-        self.page_manager.sync()
-        self.wal.file.flush()
-        if hasattr(self.wal.file, "fileno"):
-            os.fsync(self.wal.file.fileno())
+            with self._mutation_lock:
+                # Flush & sync all active data to disk under the mutation lock
+                self.segment.sync()
+                self.page_manager.sync()
+                self.wal.file.flush()
+                if hasattr(self.wal.file, "fileno"):
+                    os.fsync(self.wal.file.fileno())
 
-        # Copy data files to backup location (omit lock file)
-        for filename in ("objectdb.data", "segment-0.dat", "objectdb.wal"):
-            src_file = self.path / filename
-            dst_file = target_path / filename
-            if src_file.exists():
-                shutil.copy2(src_file, dst_file)
+                self._copy_snapshot_files(target_path)
+        else:
+            # Backup of a closed database
+            db_file = self.path / "objectdb.data"
+            if not db_file.exists():
+                raise RuntimeError("Cannot back up a non-existent database")
+
+            # Acquire advisory lock to ensure no other process is actively mutating files
+            lock_file = self.path / "objectdb.lock"
+            lock_fp = open(lock_file, "a+b")
+            try:
+                try:
+                    fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except (BlockingIOError, OSError) as exc:
+                    raise RuntimeError("Database is locked by another process") from exc
+
+                self._copy_snapshot_files(target_path)
+            finally:
+                try:
+                    fcntl.flock(lock_fp.fileno(), fcntl.LOCK_UN)
+                    lock_fp.close()
+                except Exception:
+                    pass
 
         return target_path
+
+    def _copy_snapshot_files(self, target_path: Path):
+        """
+        Atomically copy database files via a temporary staging directory,
+        sync files and directory, and ensure no partial backup is left on error.
+        """
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        staging_dir = target_path.parent / f".tmp_backup_{uuid.uuid4().hex}"
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            for filename in ("objectdb.data", "segment-0.dat", "objectdb.wal"):
+                src_file = self.path / filename
+                if src_file.exists():
+                    dst_file = staging_dir / filename
+                    shutil.copy2(src_file, dst_file)
+                    with open(dst_file, "r+b") as fp:
+                        os.fsync(fp.fileno())
+
+            # Sync staging directory metadata
+            try:
+                dir_fd = os.open(staging_dir, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except (OSError, AttributeError):
+                pass
+
+            # If target_path exists, remove it cleanly before replacement
+            if target_path.exists():
+                shutil.rmtree(target_path)
+
+            staging_dir.rename(target_path)
+
+            # Sync target parent directory
+            try:
+                parent_fd = os.open(target_path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(parent_fd)
+                finally:
+                    os.close(parent_fd)
+            except (OSError, AttributeError):
+                pass
+
+        finally:
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir, ignore_errors=True)
 
     def close(self):
         if not self.is_open:
             return
 
         canonical_path = str(self.path.resolve())
-        _ACTIVE_INSTANCES.pop(canonical_path, None)
+        if _ACTIVE_INSTANCES.get(canonical_path) is self:
+            _ACTIVE_INSTANCES.pop(canonical_path, None)
 
         try:
             if self._active_transaction is not None:
@@ -482,15 +602,27 @@ class ObjectDB:
                     pass
                 self._active_transaction = None
             if self.segment is not None:
-                self.segment.close()
+                try:
+                    self.segment.close()
+                except Exception:
+                    pass
+                self.segment = None
         finally:
             try:
                 if self.page_manager is not None:
-                    self.page_manager.close()
+                    try:
+                        self.page_manager.close()
+                    except Exception:
+                        pass
+                    self.page_manager = None
             finally:
                 try:
                     if self.wal is not None:
-                        self.wal.close()
+                        try:
+                            self.wal.close()
+                        except Exception:
+                            pass
+                        self.wal = None
                 finally:
                     if self._lock_fp is not None:
                         try:
@@ -509,22 +641,27 @@ class ObjectDB:
         self.is_open = False
         self._active_transaction = None
         canonical_path = str(self.path.resolve())
-        _ACTIVE_INSTANCES.pop(canonical_path, None)
+        if _ACTIVE_INSTANCES.get(canonical_path) is self:
+            _ACTIVE_INSTANCES.pop(canonical_path, None)
+
         if self.segment is not None:
             try:
                 self.segment.close()
             except Exception:
                 pass
+            self.segment = None
         if self.page_manager is not None:
             try:
                 self.page_manager.close()
             except Exception:
                 pass
+            self.page_manager = None
         if self.wal is not None:
             try:
                 self.wal.close()
             except Exception:
                 pass
+            self.wal = None
         if self._lock_fp is not None:
             try:
                 fcntl.flock(self._lock_fp.fileno(), fcntl.LOCK_UN)
@@ -549,35 +686,54 @@ class _DatabaseTransactionContext:
         self.db = db
         self.tx = None
         self.old_adapter = None
+        self._lock_acquired = False
 
     def __enter__(self):
         self.db._ensure_open()
-        if self.db._active_transaction is not None:
-            raise RuntimeError("Nested transactions are not supported")
+        self.db._mutation_lock.acquire()
+        self._lock_acquired = True
 
-        from objectdb.transaction import TransactionPageAdapter
+        try:
+            if self.db._active_transaction is not None:
+                raise RuntimeError("Nested transactions are not supported")
 
-        self.tx = self.db._begin_transaction()
-        adapter = TransactionPageAdapter(self.tx, self.db.page_manager, self.db.tree)
-        self.old_adapter = self.db.tree.page_manager
-        self.db.tree.page_manager = adapter
-        self.db._active_transaction = self.tx
-        return self.tx
+            from objectdb.transaction import TransactionPageAdapter
+
+            self.tx = self.db._begin_transaction()
+            adapter = TransactionPageAdapter(self.tx, self.db.page_manager, self.db.tree)
+            self.old_adapter = self.db.tree.page_manager
+            self.db.tree.page_manager = adapter
+            self.db._active_transaction = self.tx
+            return self.tx
+        except Exception:
+            if self._lock_acquired:
+                self.db._mutation_lock.release()
+                self._lock_acquired = False
+            raise
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
             if exc_type is not None:
-                if self.tx.state == TransactionState.ACTIVE:
-                    self.tx.rollback()
-                    header = read_header(self.db.page_manager.read_page(0))
-                    self.db.tree.root_page_id = header["root_page_id"]
+                if self.tx.state == TransactionState.ACTIVE and not getattr(self.db.wal, "_is_broken", False):
+                    try:
+                        self.tx.rollback()
+                    except Exception:
+                        self.db.is_poisoned = True
+                    finally:
+                        header = read_header(self.db.page_manager.read_page(0))
+                        self.db.tree.root_page_id = header["root_page_id"]
+                else:
+                    self.db.is_poisoned = True
             else:
                 self.db.segment.sync()
                 self.tx.commit()
         except Exception:
-            if self.tx.state in (TransactionState.COMMITTING, TransactionState.FAILED):
+            if self.tx.state in (TransactionState.COMMITTING, TransactionState.FAILED) or getattr(self.db.wal, "_is_broken", False):
                 self.db.is_poisoned = True
             raise
         finally:
             self.db.tree.page_manager = self.old_adapter
             self.db._active_transaction = None
+            if self._lock_acquired:
+                self.db._mutation_lock.release()
+                self._lock_acquired = False
