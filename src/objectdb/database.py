@@ -592,13 +592,17 @@ class ObjectDB:
 
             try:
                 staging_dir.rename(target_path)
-            except Exception:
+            except Exception as replace_err:
+                restore_err = None
                 # Restore previous valid backup if renaming staging failed
                 if old_backup_dir is not None and old_backup_dir.exists():
                     try:
                         old_backup_dir.rename(target_path)
-                    except Exception:
-                        pass
+                        old_backup_dir = None
+                    except Exception as err:
+                        restore_err = err
+                if restore_err is not None:
+                    raise replace_err from restore_err
                 raise
             else:
                 # Backup replacement succeeded: clean up previous backup
@@ -619,8 +623,6 @@ class ObjectDB:
         finally:
             if staging_dir.exists():
                 _remove_path(staging_dir)
-            if old_backup_dir is not None and old_backup_dir.exists():
-                _remove_path(old_backup_dir)
 
     def close(self):
         if not self.is_open:

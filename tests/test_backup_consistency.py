@@ -279,3 +279,107 @@ def test_backup_replacement_failure_preserves_previous_valid_backup(tmp_path):
 
     db.close()
 
+
+def test_backup_replacement_and_restoration_double_failure_preserves_old_backup(tmp_path):
+    """
+    When replacing an existing backup, if both the staging-to-target rename fails
+    AND the old-backup-to-target restoration rename fails:
+    1. The old backup is NEVER deleted and remains intact at its .old_backup_<uuid> location.
+    2. Both the replacement error and restoration error are reported via exception chaining.
+    3. The preserved backup files are valid and can be manually restored/opened.
+    4. Successful replacements continue to work as expected.
+    """
+    db_path = tmp_path / "double_fail_src"
+    backup_path = tmp_path / "double_fail_dst"
+
+    db = ObjectDB(db_path)
+    db.open()
+    db.put(1, b"initial_valid_backup_payload")
+    db.backup(backup_path)
+
+    # Verify initial backup is valid
+    b1 = ObjectDB(backup_path)
+    b1.open()
+    assert b1.get(1) == b"initial_valid_backup_payload"
+    b1.close()
+
+    # Modify source db
+    db.put(2, b"new_mutation_payload")
+
+    # Injected errors for both renames
+    staging_err = OSError("Injected error during staging-to-target rename")
+    restore_err = OSError("Injected error during old-backup-to-target restoration rename")
+
+    real_rename = Path.rename
+
+    def double_failing_rename(self, target):
+        target_path_obj = Path(target)
+        self_str = str(self)
+        if target_path_obj == backup_path and ".tmp_backup_" in self_str:
+            raise staging_err
+        if target_path_obj == backup_path and ".old_backup_" in self_str:
+            raise restore_err
+        return real_rename(self, target)
+
+    with patch.object(Path, "rename", side_effect=double_failing_rename, autospec=True):
+        with pytest.raises(OSError, match="Injected error during staging-to-target rename") as exc_info:
+            db.backup(backup_path)
+
+        # Requirement 3: Both errors reported; restoration error is chained as __cause__
+        assert exc_info.value is staging_err
+        assert exc_info.value.__cause__ is restore_err
+
+    # Requirement 4: Staging directory must be cleaned up
+    staging_dirs = [p for p in tmp_path.iterdir() if p.name.startswith(".tmp_backup_")]
+    assert staging_dirs == []
+
+    # Requirements 1 & 2: Old backup must NOT be deleted and must be preserved in .old_backup_<uuid>
+    old_backups = [p for p in tmp_path.iterdir() if p.name.startswith(".old_backup_")]
+    assert len(old_backups) == 1, "The previous valid backup should be preserved in .old_backup_<uuid>"
+    preserved_old_backup = old_backups[0]
+
+    # Requirement 6: Verify old backup files remain available and valid
+    assert (preserved_old_backup / "objectdb.data").exists()
+    assert (preserved_old_backup / "objectdb.wal").exists()
+
+    b_preserved = ObjectDB(preserved_old_backup)
+    b_preserved.open()
+    try:
+        assert b_preserved.check_integrity()["valid"] is True
+        assert b_preserved.get(1) == b"initial_valid_backup_payload"
+        assert b_preserved.get(2) is None
+    finally:
+        b_preserved.close()
+
+    # Verify manual restoration works
+    preserved_old_backup.rename(backup_path)
+    b_restored = ObjectDB(backup_path)
+    b_restored.open()
+    try:
+        assert b_restored.check_integrity()["valid"] is True
+        assert b_restored.get(1) == b"initial_valid_backup_payload"
+        assert b_restored.get(2) is None
+    finally:
+        b_restored.close()
+
+    # Requirement 7: Preserve existing successful replacement behavior
+    db.backup(backup_path)
+    b_replaced = ObjectDB(backup_path)
+    b_replaced.open()
+    try:
+        assert b_replaced.check_integrity()["valid"] is True
+        assert b_replaced.get(1) == b"initial_valid_backup_payload"
+        assert b_replaced.get(2) == b"new_mutation_payload"
+    finally:
+        b_replaced.close()
+
+    # No leftover temporary directories
+    leftover = [
+        p.name for p in tmp_path.iterdir()
+        if p.name.startswith(".tmp_backup_") or p.name.startswith(".old_backup_")
+    ]
+    assert leftover == []
+
+    db.close()
+
+
