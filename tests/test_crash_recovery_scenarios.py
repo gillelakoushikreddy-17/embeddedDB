@@ -210,3 +210,48 @@ def test_recovery_is_idempotent(tmp_path):
 
     m2.close()
     w2.close()
+
+
+def test_recovered_transaction_does_not_undo_subsequent_committed_transactions_on_next_reopen(tmp_path):
+    """
+    Verify that an incomplete transaction recovered in session 1 is recorded as rolled back,
+    so that subsequent session 2 updates to the same pages/keys are NOT undone when session 3 opens.
+    """
+    db_path = tmp_path / "multi_session_recovery_db"
+
+    # Session 1: Commit initial value
+    db = ObjectDB(db_path)
+    db.open()
+    db.put(1, b"session1_val")
+    db.close()
+
+    # Session 2: Start transaction, write dirty value, simulate ungraceful crash
+    db = ObjectDB(db_path)
+    db.open()
+    try:
+        with db.transaction():
+            db.put(1, b"dirty_uncommitted")
+            db.simulate_crash()
+            raise SystemExit("Crash")
+    except SystemExit:
+        pass
+
+    # Session 3: Reopen database. Startup recovery rolls back dirty value to session1_val
+    db = ObjectDB(db_path)
+    db.open()
+    assert db.get(1) == b"session1_val"
+
+    # Commit a new update to the same key
+    db.put(1, b"session3_committed_val")
+    assert db.get(1) == b"session3_committed_val"
+    db.close()
+
+    # Session 4: Reopen database. Recovery MUST NOT re-undo session 3's committed write!
+    db = ObjectDB(db_path)
+    db.open()
+    try:
+        assert db.get(1) == b"session3_committed_val"
+        assert db.check_integrity()["valid"] is True
+    finally:
+        db.close()
+

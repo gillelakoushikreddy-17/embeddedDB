@@ -15,6 +15,8 @@ class WriteAheadLog:
 
     def open(self):
         """Open the WAL, discard a truncated final record, and find the next LSN."""
+        if self.file is not None:
+            return
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self.file = open(self.file_path, "a+b")
         self._is_broken = False

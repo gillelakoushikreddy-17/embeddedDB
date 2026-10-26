@@ -22,6 +22,18 @@ MAX_KEY = 9223372036854775807
 _ACTIVE_INSTANCES = {}
 
 
+def _remove_path(path: Path):
+    if not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
 def _validate_key(key):
     if not isinstance(key, int) or isinstance(key, bool):
         raise TypeError("Key must be an integer")
@@ -124,7 +136,11 @@ class ObjectDB:
 
             page_writer = TransactionalPageWriter(manager, wal)
             recovery = RecoveryManager(wal)
-            recovery.recover(page_writer)
+            rec_result = recovery.recover(page_writer)
+
+            # Record durable ROLLBACK in WAL for recovered transactions
+            for tx_id in rec_result.get("recovered_transactions", []):
+                wal.append("ROLLBACK", {"transaction_id": tx_id})
 
             analysis = recovery.analyze()
             existing_tx_ids = set(analysis["transactions"].keys())
@@ -587,7 +603,7 @@ class ObjectDB:
             else:
                 # Backup replacement succeeded: clean up previous backup
                 if old_backup_dir is not None and old_backup_dir.exists():
-                    shutil.rmtree(old_backup_dir, ignore_errors=True)
+                    _remove_path(old_backup_dir)
                     old_backup_dir = None
 
             # Sync target parent directory
@@ -602,9 +618,9 @@ class ObjectDB:
 
         finally:
             if staging_dir.exists():
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                _remove_path(staging_dir)
             if old_backup_dir is not None and old_backup_dir.exists():
-                shutil.rmtree(old_backup_dir, ignore_errors=True)
+                _remove_path(old_backup_dir)
 
     def close(self):
         if not self.is_open:

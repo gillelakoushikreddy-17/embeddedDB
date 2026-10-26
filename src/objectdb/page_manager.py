@@ -11,6 +11,8 @@ class PageManager:
         self.file = None
 
     def open(self):
+        if self.file is not None:
+            return
         self.file = open(self.file_path, "r+b")
 
         try:

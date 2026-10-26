@@ -8,6 +8,8 @@ class Segment:
         self.file = None
 
     def open(self):
+        if self.file is not None:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.file = open(self.path, "a+b")
         self.file.seek(0)
@@ -50,6 +52,11 @@ class Segment:
             or size < 0
         ):
             raise ValueError("Offset and size must be non-negative integers")
+
+        self.file.seek(0, 2)
+        file_size = self.file.tell()
+        if offset > file_size or offset + size > file_size:
+            raise ValueError("Not enough data at the requested location")
 
         self.file.seek(offset)
         data = self.file.read(size)

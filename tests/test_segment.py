@@ -70,3 +70,24 @@ def test_segment_append_empty_value(tmp_path):
         assert segment.read(offset, size) == b""
     finally:
         segment.close()
+
+
+def test_segment_read_zero_size_beyond_end_rejected(tmp_path):
+    segment = Segment(tmp_path / "segment_zero.dat")
+    segment.open()
+    try:
+        segment.append(b"data")
+        # Reading at offset 10 with size 0 beyond EOF must be rejected
+        with pytest.raises(ValueError, match="Not enough data"):
+            segment.read(10, 0)
+    finally:
+        segment.close()
+
+
+def test_segment_idempotent_open(tmp_path):
+    segment = Segment(tmp_path / "segment_idem.dat")
+    segment.open()
+    fp1 = segment.file
+    segment.open()  # Second open should be a no-op
+    assert segment.file is fp1
+    segment.close()

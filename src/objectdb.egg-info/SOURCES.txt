@@ -19,7 +19,9 @@ src/objectdb.egg-info/PKG-INFO
 src/objectdb.egg-info/SOURCES.txt
 src/objectdb.egg-info/dependency_links.txt
 src/objectdb.egg-info/top_level.txt
+tests/test_adversarial_durability.py
 tests/test_allocate_page.py
+tests/test_backup_consistency.py
 tests/test_btree.py
 tests/test_btree_leaf_page.py
 tests/test_btree_page.py
@@ -28,11 +30,13 @@ tests/test_concurrency_lock.py
 tests/test_crash_recovery_scenarios.py
 tests/test_database.py
 tests/test_durability_ordering.py
+tests/test_initialization_cleanup.py
 tests/test_integrity_and_backup.py
 tests/test_internal_rebalancing.py
 tests/test_objectdb_api.py
 tests/test_objectdb_persistence.py
 tests/test_objectdb_startup_recovery.py
+tests/test_page_allocation_recovery.py
 tests/test_page_manager.py
 tests/test_page_storage.py
 tests/test_persistent_btree.py
@@ -48,3 +52,4 @@ tests/test_transaction.py
 tests/test_transaction_integration.py
 tests/test_transactional_page_writer.py
 tests/test_wal.py
+tests/test_wal_durability_failures.py
