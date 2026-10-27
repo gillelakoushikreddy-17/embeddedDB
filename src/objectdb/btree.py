@@ -24,6 +24,10 @@ def encode_internal_node(keys, child_page_ids):
     if len(child_page_ids) != len(keys) + 1:
         raise ValueError("An internal node needs one more child than key")
 
+    for i in range(len(keys) - 1):
+        if keys[i] >= keys[i + 1]:
+            raise ValueError("Internal keys must be strictly sorted without duplicates")
+
     key_count = len(keys)
     required_size = (
         INTERNAL_HEADER_SIZE
@@ -80,6 +84,10 @@ def decode_internal_node(page):
         struct.unpack_from(f"<{key_count + 1}I", page, offset + key_count * KEY_SIZE)
     )
 
+    for i in range(len(keys) - 1):
+        if keys[i] >= keys[i + 1]:
+            raise ValueError("Internal keys must be strictly sorted without duplicates")
+
     return keys, child_page_ids
 
 
@@ -88,8 +96,8 @@ def encode_leaf_node(keys, records):
         raise ValueError("Each key must have one record reference")
 
     for i in range(len(keys) - 1):
-        if keys[i] > keys[i + 1]:
-            raise ValueError("Leaf keys must be sorted")
+        if keys[i] >= keys[i + 1]:
+            raise ValueError("Leaf keys must be strictly sorted without duplicates")
 
     page = bytearray(PAGE_SIZE)
 
@@ -148,8 +156,8 @@ def decode_leaf_node(page):
         offset += entry_size
 
     for i in range(len(keys) - 1):
-        if keys[i] > keys[i + 1]:
-            raise ValueError("Leaf keys must be sorted")
+        if keys[i] >= keys[i + 1]:
+            raise ValueError("Leaf keys must be strictly sorted without duplicates")
 
     return keys, records
 

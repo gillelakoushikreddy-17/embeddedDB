@@ -152,7 +152,8 @@ class Tree:
                     except Exception:
                         self.db.is_poisoned = True
                     finally:
-                        self.btree.root_page_id = self.db.catalog.get_root(self._name)
+                        if self.db.catalog is not None and self.db.catalog.has_tree(self._name):
+                            self.btree.root_page_id = self.db.catalog.get_root(self._name)
                 else:
                     self.db.is_poisoned = True
                 raise
@@ -204,7 +205,8 @@ class Tree:
                     except Exception:
                         self.db.is_poisoned = True
                     finally:
-                        self.btree.root_page_id = self.db.catalog.get_root(self._name)
+                        if self.db.catalog is not None and self.db.catalog.has_tree(self._name):
+                            self.btree.root_page_id = self.db.catalog.get_root(self._name)
                 else:
                     self.db.is_poisoned = True
                 raise

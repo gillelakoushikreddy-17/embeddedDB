@@ -42,6 +42,8 @@ class PageManager:
             self.file = None
 
     def read_page(self, page_id):
+        if self.file is None:
+            raise RuntimeError("Database file is not open")
         if not isinstance(page_id, int) or isinstance(page_id, bool) or page_id < 0:
             raise ValueError("Page ID must be a non-negative integer")
         offset = page_id * PAGE_SIZE
@@ -55,6 +57,8 @@ class PageManager:
         return data
 
     def write_page(self, page_id, data):
+        if self.file is None:
+            raise RuntimeError("Database file is not open")
         if not isinstance(page_id, int) or isinstance(page_id, bool) or page_id < 0:
             raise ValueError("Page ID must be a non-negative integer")
         if page_id == 0:
@@ -82,6 +86,8 @@ class PageManager:
             file.write(page_zero)
 
     def allocate_page(self):
+        if self.file is None:
+            raise RuntimeError("Database file is not open")
         self.file.seek(0, 2)
         file_size = self.file.tell()
 
@@ -106,6 +112,8 @@ class PageManager:
         return page_id
 
     def update_root_page_id(self, root_page_id):
+        if self.file is None:
+            raise RuntimeError("Database file is not open")
         if (
                 not isinstance(root_page_id, int)
                 or isinstance(root_page_id, bool)
@@ -126,6 +134,8 @@ class PageManager:
         self.file.flush()
 
     def update_catalog_page_id(self, catalog_page_id):
+        if self.file is None:
+            raise RuntimeError("Database file is not open")
         if (
                 not isinstance(catalog_page_id, int)
                 or isinstance(catalog_page_id, bool)

@@ -24,6 +24,7 @@ src/objectdb.egg-info/requires.txt
 src/objectdb.egg-info/top_level.txt
 tests/test_adversarial_durability.py
 tests/test_allocate_page.py
+tests/test_audit_fixes.py
 tests/test_backup_consistency.py
 tests/test_btree.py
 tests/test_btree_leaf_page.py

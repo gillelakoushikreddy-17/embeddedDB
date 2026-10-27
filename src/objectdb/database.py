@@ -146,6 +146,7 @@ class ObjectDB:
         self.is_open = False
         self.is_poisoned = False
         self._active_transaction = None
+        self._active_transaction_context = None
         self._lock_fp = None
         self._mutation_lock = threading.RLock()
 
@@ -453,6 +454,9 @@ class ObjectDB:
                 tree_obj = Tree(name, self, btree)
                 tree_adapter.tree = tree_obj
                 self._trees[name] = tree_obj
+                if self._active_transaction_context is not None:
+                    self._active_transaction_context.dropped_trees.discard(name)
+                    self._active_transaction_context.created_trees.add(tree_obj)
                 return tree_obj
 
             tx = None
@@ -520,6 +524,8 @@ class ObjectDB:
             if isinstance(tree_adapter, NamedTreeTransactionPageAdapter):
                 tree_adapter.tree = tree_obj
             self._trees[name] = tree_obj
+            if self._active_transaction_context is not None:
+                self._active_transaction_context.created_trees.add(tree_obj)
             return tree_obj
 
     def get_tree(self, name: str) -> Tree:
@@ -558,7 +564,10 @@ class ObjectDB:
                     writer=tx.page_writer,
                     tx_id=tx.transaction_id,
                 )
-                self._trees.pop(name, None)
+                if self._active_transaction_context is not None:
+                    self._active_transaction_context.dropped_trees.add(name)
+                else:
+                    self._trees.pop(name, None)
                 return dropped
 
             tx = None
@@ -570,7 +579,9 @@ class ObjectDB:
                     tx_id=tx.transaction_id,
                 )
                 tx.commit()
-                self._trees.pop(name, None)
+                tree_obj = self._trees.pop(name, None)
+                if tree_obj is not None:
+                    tree_obj.btree.page_manager = NamedTreePageAdapter(self, name)
                 return dropped
             except Exception:
                 if (
@@ -584,6 +595,8 @@ class ObjectDB:
                         self.is_poisoned = True
                     finally:
                         self.catalog.load()
+                        if name in self._trees:
+                            self._trees[name].btree.root_page_id = self.catalog.get_root(name)
                 else:
                     self.is_poisoned = True
                 raise
@@ -962,6 +975,7 @@ class ObjectDB:
                 except Exception:
                     pass
                 self._active_transaction = None
+            self._active_transaction_context = None
             if self.segment is not None:
                 try:
                     self.segment.close()
@@ -1001,6 +1015,7 @@ class ObjectDB:
             return
         self.is_open = False
         self._active_transaction = None
+        self._active_transaction_context = None
         self._trees.clear()
         self.catalog = None
         canonical_path = str(self.path.resolve())
@@ -1049,7 +1064,9 @@ class _DatabaseTransactionContext:
         self.db = db
         self.tx = None
         self.old_adapter = None
-        self.old_tree_adapters = {}
+        self.saved_trees = {}
+        self.dropped_trees = set()
+        self.created_trees = set()
         self._lock_acquired = False
 
     def __enter__(self):
@@ -1065,18 +1082,22 @@ class _DatabaseTransactionContext:
 
             self.tx = self.db._begin_transaction()
             self.db._active_transaction = self.tx
+            self.db._active_transaction_context = self
+            self.dropped_trees = set()
+            self.created_trees = set()
 
             adapter = TransactionPageAdapter(self.tx, self.db.page_manager, self.db.tree)
             self.old_adapter = self.db.tree.page_manager
             self.db.tree.page_manager = adapter
 
-            self.old_tree_adapters = {}
+            self.saved_trees = dict(self.db._trees)
             for name, t in self.db._trees.items():
-                self.old_tree_adapters[name] = t.btree.page_manager
                 t.btree.page_manager = NamedTreeTransactionPageAdapter(self.tx, self.db.page_manager, t)
 
             return self.tx
         except Exception:
+            self.db._active_transaction = None
+            self.db._active_transaction_context = None
             if self._lock_acquired:
                 self.db._mutation_lock.release()
                 self._lock_acquired = False
@@ -1099,16 +1120,23 @@ class _DatabaseTransactionContext:
                             if self.db.catalog is not None:
                                 self.db.catalog.catalog_page_id = header.get("catalog_page_id", 0)
                                 self.db.catalog.load()
+                                # Restore previously saved trees that exist in the restored catalog
+                                for name, t in self.saved_trees.items():
+                                    if self.db.catalog.has_tree(name):
+                                        self.db._trees[name] = t
+                                        t.btree.root_page_id = self.db.catalog.get_root(name)
+                                # Remove uncommitted trees created during this aborted transaction
                                 for name in list(self.db._trees.keys()):
                                     if not self.db.catalog.has_tree(name):
                                         del self.db._trees[name]
-                                    else:
-                                        self.db._trees[name].btree.root_page_id = self.db.catalog.get_root(name)
                 else:
                     self.db.is_poisoned = True
             else:
                 self.db.segment.sync()
                 self.tx.commit()
+                # On successful commit, remove dropped trees from _trees cache
+                for name in self.dropped_trees:
+                    self.db._trees.pop(name, None)
         except Exception:
             if self.tx.state in (TransactionState.COMMITTING, TransactionState.FAILED) or getattr(self.db.wal, "_is_broken", False):
                 self.db.is_poisoned = True
@@ -1116,10 +1144,18 @@ class _DatabaseTransactionContext:
         finally:
             if self.db.tree is not None:
                 self.db.tree.page_manager = self.old_adapter
-            for name, old_ad in getattr(self, "old_tree_adapters", {}).items():
-                if name in self.db._trees:
-                    self.db._trees[name].btree.page_manager = old_ad
+            # Restore NamedTreePageAdapter on all active trees in _trees
+            for name, t in self.db._trees.items():
+                t.btree.page_manager = NamedTreePageAdapter(self.db, name)
+            # Also restore NamedTreePageAdapter on any saved or created trees that were dropped/aborted
+            for name, t in getattr(self, "saved_trees", {}).items():
+                if name not in self.db._trees:
+                    t.btree.page_manager = NamedTreePageAdapter(self.db, name)
+            for t in getattr(self, "created_trees", set()):
+                if t.name not in self.db._trees:
+                    t.btree.page_manager = NamedTreePageAdapter(self.db, t.name)
             self.db._active_transaction = None
+            self.db._active_transaction_context = None
             if self._lock_acquired:
                 self.db._mutation_lock.release()
                 self._lock_acquired = False
