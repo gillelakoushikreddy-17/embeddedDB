@@ -550,5 +550,13 @@ def test_drop_tree(tmp_path):
         with pytest.raises(TreeNotFoundError):
             db.open_tree("temp_tree")
 
+        # Calling operations on the orphaned handle also raises TreeNotFoundError
+        with pytest.raises(TreeNotFoundError):
+            t.get(1)
+        with pytest.raises(TreeNotFoundError):
+            t.put(2, b"value2")
+        with pytest.raises(TreeNotFoundError):
+            t.delete(1)
+
         report = db.check_integrity(raise_on_error=True)
         assert report["valid"] is True

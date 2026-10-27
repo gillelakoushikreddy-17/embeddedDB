@@ -105,9 +105,17 @@ class Tree:
     def root_page_id(self) -> int:
         return self.btree.root_page_id
 
+    def _ensure_valid(self) -> None:
+        self.db._ensure_open()
+        if not self.db.catalog.has_tree(self._name):
+            from objectdb.catalog import TreeNotFoundError
+            raise TreeNotFoundError(
+                f"Tree '{self._name}' has been dropped or does not exist"
+            )
+
     def put(self, key: int, value: bytes) -> None:
         """Store key-value pair in this tree."""
-        self.db._ensure_open()
+        self._ensure_valid()
         _validate_key(key)
 
         if not isinstance(value, bytes):
@@ -153,7 +161,7 @@ class Tree:
 
     def get(self, key: int) -> bytes | None:
         """Retrieve value for key from this tree. Returns None if missing."""
-        self.db._ensure_open()
+        self._ensure_valid()
         _validate_key(key)
 
         record = self.btree.search(key)
@@ -168,7 +176,7 @@ class Tree:
 
     def delete(self, key: int) -> bool:
         """Delete key from this tree. Returns True if deleted, False if key did not exist."""
-        self.db._ensure_open()
+        self._ensure_valid()
         _validate_key(key)
 
         with self.db._mutation_lock:
