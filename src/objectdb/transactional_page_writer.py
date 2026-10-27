@@ -156,6 +156,49 @@ class TransactionalPageWriter:
 
         self.page_manager.update_root_page_id(original_root_page_id)
 
+    def update_catalog_page_id(self, transaction_id, new_catalog_page_id):
+        """Log the current catalog page ID before updating it in the header."""
+        if (
+            not isinstance(transaction_id, int)
+            or isinstance(transaction_id, bool)
+            or transaction_id <= 0
+        ):
+            raise ValueError("Transaction ID must be a positive integer")
+
+        if (
+            not isinstance(new_catalog_page_id, int)
+            or isinstance(new_catalog_page_id, bool)
+            or new_catalog_page_id < 0
+        ):
+            raise ValueError("Catalog page ID must be a non-negative integer")
+
+        from objectdb.header import read_header
+        page_zero = self.page_manager.read_page(0)
+        header = read_header(page_zero)
+        original_catalog_page_id = header.get("catalog_page_id", 0)
+
+        self.wal.append(
+            "CATALOG_PAGE_BEFORE_IMAGE",
+            {
+                "transaction_id": transaction_id,
+                "original_catalog_page_id": original_catalog_page_id,
+                "new_catalog_page_id": new_catalog_page_id,
+            },
+        )
+
+        self.page_manager.update_catalog_page_id(new_catalog_page_id)
+
+    def restore_catalog_page_id(self, original_catalog_page_id):
+        """Restore the catalog page ID from a recorded before-image."""
+        if (
+            not isinstance(original_catalog_page_id, int)
+            or isinstance(original_catalog_page_id, bool)
+            or original_catalog_page_id < 0
+        ):
+            raise ValueError("Catalog page ID must be a non-negative integer")
+
+        self.page_manager.update_catalog_page_id(original_catalog_page_id)
+
     def sync(self):
         """Make database page changes durable."""
         self.page_manager.sync()

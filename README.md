@@ -8,12 +8,13 @@
 
 ObjectDB separates index structure from payload storage:
 
-- **B+ Tree Index (`PersistentBTree`)**: Maintains a persistent, ordered index of 64-bit integer keys mapped to fixed-size record pointers (`(segment_id, offset, size)`). Supports root splits, internal node splits, leaf borrowing, merging, and tree rebalancing.
-- **Page Manager (`PageManager`)**: Allocates, reads, and writes fixed-size 4096-byte database pages (`objectdb.data`). Page 0 is reserved for header metadata (including magic number, format version, page size, and the root page ID).
-- **Segment Storage (`Segment`)**: Append-only log file (`segment-0.dat`) storing arbitrary byte payloads.
-- **Write-Ahead Log (`WriteAheadLog`)**: An append-only journal (`objectdb.wal`) that records operation lifecycle records (`BEGIN`, `PAGE_ALLOCATED`, `PAGE_BEFORE_IMAGE`, `ROOT_PAGE_BEFORE_IMAGE`, `COMMIT`, `ROLLBACK`) with monotonically increasing Log Sequence Numbers (LSNs).
-- **Transaction Manager (`Transaction` & `TransactionalPageWriter`)**: Ensures ACID properties for database mutations using before-image undo logging.
-- **Crash Recovery (`RecoveryManager`)**: Analyzes the WAL upon startup and restores before-images for any uncommitted/interrupted transactions, ensuring the database is always consistent before accepting operations.
+- **B+ Tree Index (`PersistentBTree` & `Tree`)**: Maintains persistent, ordered indexes of 64-bit integer keys mapped to fixed-size record pointers (`(segment_id, offset, size)`). Supports multiple named trees alongside the default tree, root splits, internal node splits, leaf borrowing, merging, and tree rebalancing.
+- **Tree Catalog (`TreeCatalog`)**: Maintains a persistent, crash-safe catalog mapping tree names to root page IDs across chained catalog pages, allowing any number of named trees without arbitrary limits.
+- **Page Manager (`PageManager`)**: Allocates, reads, and writes fixed-size 4096-byte database pages (`objectdb.data`). Page 0 is reserved for header metadata (including magic number, format version, page size, default root page ID, and catalog root page ID).
+- **Segment Storage (`Segment`)**: Append-only log file (`segment-0.dat`) storing arbitrary byte payloads shared across all trees.
+- **Write-Ahead Log (`WriteAheadLog`)**: An append-only journal (`objectdb.wal`) that records operation lifecycle records (`BEGIN`, `PAGE_ALLOCATED`, `PAGE_BEFORE_IMAGE`, `ROOT_PAGE_BEFORE_IMAGE`, `CATALOG_PAGE_BEFORE_IMAGE`, `COMMIT`, `ROLLBACK`) with monotonically increasing Log Sequence Numbers (LSNs).
+- **Transaction Manager (`Transaction` & `TransactionalPageWriter`)**: Ensures ACID properties for database mutations across all trees using before-image undo logging.
+- **Crash Recovery (`RecoveryManager`)**: Analyzes the WAL upon startup and restores before-images for any uncommitted/interrupted transactions (including tree creation, catalog updates, splits, and page allocations), ensuring the database is always consistent before accepting operations.
 - **Process Concurrency Lock**: Enforces single-process database access using an OS-level file lock (`objectdb.lock`), preventing conflicting writers from corrupting data.
 
 ---
@@ -95,6 +96,63 @@ try:
     val = db.get(1)
 finally:
     db.close()
+```
+
+### Multi-Tree Support (Namespaces)
+
+ObjectDB supports multiple independent persistent B+ trees within a single database file. All trees share the underlying page manager, write-ahead log (WAL), and payload segment while maintaining completely isolated keyspaces.
+
+```python
+from objectdb import ObjectDB, TreeAlreadyExistsError, TreeNotFoundError
+
+with ObjectDB("./my_database") as db:
+    # 1. Create named trees
+    users = db.create_tree("users")
+    orders = db.create_tree("orders")
+
+    # 2. Key-value isolation across trees
+    users.put(1, b'{"name": "Alice"}')
+    orders.put(1, b'{"order_id": 1, "item": "Widget"}')
+
+    print(users.get(1))   # b'{"name": "Alice"}'
+    print(orders.get(1))  # b'{"order_id": 1, "item": "Widget"}'
+
+    # 3. List all registered trees
+    trees = db.list_trees()
+    print(trees)  # ['orders', 'users']
+
+    # 4. Open an existing tree
+    users_tree = db.open_tree("users")  # alias: db.get_tree("users")
+    
+    # 5. Get or create a tree
+    events = db.get_or_create_tree("events")
+
+    # 6. Delete a key from a tree
+    orders.delete(1)
+    assert orders.get(1) is None
+    assert users.get(1) is not None  # users tree unaffected
+
+    # 7. Drop an entire tree
+    dropped = db.drop_tree("orders")
+    assert dropped is True
+    assert "orders" not in db.list_trees()
+```
+
+#### Tree Naming Rules & Exceptions
+- **Tree Names**: Must be non-empty strings up to 255 characters, containing only ASCII alphanumeric characters, underscores (`_`), hyphens (`-`), or periods (`.`).
+- **`TreeAlreadyExistsError`**: Raised when calling `create_tree(name)` with a name that already exists in the catalog.
+- **`TreeNotFoundError`**: Raised when calling `open_tree(name)` or `get_tree(name)` with a name that does not exist in the catalog.
+- **Transactions across Multiple Trees**: Named trees participate seamlessly in batch transactions:
+
+```python
+with ObjectDB("./my_database") as db:
+    users = db.get_or_create_tree("users")
+    logs = db.get_or_create_tree("audit_logs")
+
+    with db.transaction():
+        users.put(42, b'{"name": "Bob"}')
+        logs.put(1, b'{"action": "created user 42"}')
+        # If an error is raised here, all mutations across both trees roll back atomically!
 ```
 
 ---
@@ -228,6 +286,9 @@ pytest tests/test_objectdb_api.py -v
 
 # Run transaction and crash-recovery suites
 pytest tests/test_transaction_integration.py tests/test_crash_recovery_scenarios.py -v
+
+# Run multi-tree index and catalog tests
+pytest tests/test_multi_tree.py -v
 
 # Run backup consistency and failure injection tests
 pytest tests/test_backup_consistency.py -v

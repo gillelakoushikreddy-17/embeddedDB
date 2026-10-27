@@ -3,6 +3,7 @@ README.md
 pyproject.toml
 src/objectdb/__init__.py
 src/objectdb/btree.py
+src/objectdb/catalog.py
 src/objectdb/database.py
 src/objectdb/header.py
 src/objectdb/page_manager.py
@@ -14,6 +15,7 @@ src/objectdb/segment.py
 src/objectdb/storage.py
 src/objectdb/transaction.py
 src/objectdb/transactional_page_writer.py
+src/objectdb/tree.py
 src/objectdb/wal.py
 src/objectdb.egg-info/PKG-INFO
 src/objectdb.egg-info/SOURCES.txt
@@ -34,6 +36,7 @@ tests/test_durability_ordering.py
 tests/test_initialization_cleanup.py
 tests/test_integrity_and_backup.py
 tests/test_internal_rebalancing.py
+tests/test_multi_tree.py
 tests/test_objectdb_api.py
 tests/test_objectdb_persistence.py
 tests/test_objectdb_startup_recovery.py

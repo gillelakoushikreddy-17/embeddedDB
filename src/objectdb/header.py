@@ -1,4 +1,3 @@
-
 import struct
 
 MAGIC = b"OBJDB001"
@@ -7,20 +6,33 @@ PAGE_SIZE = 4096
 
 # Magic value, format version, page size, root page ID
 HEADER_FORMAT = "<8sIII"
-HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)  # 20 bytes
+
+EXTENDED_HEADER_FORMAT = "<8sIIII"
+EXTENDED_HEADER_SIZE = struct.calcsize(EXTENDED_HEADER_FORMAT)  # 24 bytes
 
 # 0 means the tree has not been created yet.
 # Page 0 is reserved for the database header.
 NO_ROOT_PAGE = 0
+NO_CATALOG_PAGE = 0
 
 
-def create_header(root_page_id=NO_ROOT_PAGE):
+def create_header(root_page_id=NO_ROOT_PAGE, catalog_page_id=None):
+    if catalog_page_id is None:
+        return struct.pack(
+            HEADER_FORMAT,
+            MAGIC,
+            FORMAT_VERSION,
+            PAGE_SIZE,
+            root_page_id,
+        )
     return struct.pack(
-        HEADER_FORMAT,
+        EXTENDED_HEADER_FORMAT,
         MAGIC,
         FORMAT_VERSION,
         PAGE_SIZE,
         root_page_id,
+        catalog_page_id,
     )
 
 
@@ -42,8 +54,13 @@ def read_header(data):
     if page_size != PAGE_SIZE:
         raise ValueError("Unsupported page size")
 
+    catalog_page_id = NO_CATALOG_PAGE
+    if len(data) >= EXTENDED_HEADER_SIZE:
+        catalog_page_id = struct.unpack_from("<I", data, HEADER_SIZE)[0]
+
     return {
         "version": version,
         "page_size": page_size,
         "root_page_id": root_page_id,
+        "catalog_page_id": catalog_page_id,
     }

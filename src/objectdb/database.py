@@ -8,7 +8,14 @@ import sys
 import threading
 import uuid
 
-from objectdb.header import NO_ROOT_PAGE, create_header, read_header
+from objectdb.catalog import (
+    TreeCatalog,
+    TreeAlreadyExistsError,
+    TreeNotFoundError,
+    validate_tree_name,
+    decode_catalog_page,
+)
+from objectdb.header import NO_ROOT_PAGE, NO_CATALOG_PAGE, create_header, read_header
 from objectdb.page_manager import PAGE_SIZE, PageManager
 from objectdb.persistent_btree import PersistentBTree
 from objectdb.record import decode_record, encode_record
@@ -16,6 +23,11 @@ from objectdb.recovery import RecoveryManager
 from objectdb.segment import Segment
 from objectdb.transaction import TransactionPageAdapter, TransactionState
 from objectdb.transactional_page_writer import TransactionalPageWriter
+from objectdb.tree import (
+    Tree,
+    NamedTreePageAdapter,
+    NamedTreeTransactionPageAdapter,
+)
 from objectdb.wal import WriteAheadLog
 
 MIN_KEY = -9223372036854775808
@@ -128,6 +140,8 @@ class ObjectDB:
         self.segment = None
         self.wal = None
         self.page_writer = None
+        self.catalog = None
+        self._trees = {}
         self.next_transaction_id = 1
         self.is_open = False
         self.is_poisoned = False
@@ -237,12 +251,20 @@ class ObjectDB:
             segment = Segment(segment_file)
             segment.open()
 
+            # 6. Catalog load
+            header = read_header(manager.read_page(0))
+            catalog_page_id = header.get("catalog_page_id", NO_CATALOG_PAGE)
+            catalog = TreeCatalog(manager, catalog_page_id)
+            catalog.load()
+
             # Successfully initialized
             self.page_manager = manager
             self.tree = tree
             self.segment = segment
             self.wal = wal
             self.page_writer = page_writer
+            self.catalog = catalog
+            self._trees = {}
             self.is_open = True
             self.is_poisoned = False
 
@@ -288,6 +310,8 @@ class ObjectDB:
             self.segment = None
             self.wal = None
             self.page_writer = None
+            self.catalog = None
+            self._trees = {}
             self.is_open = False
             self.is_poisoned = False
 
@@ -401,6 +425,169 @@ class ObjectDB:
 
         return self.segment.read(offset, size)
 
+    def create_tree(self, name: str) -> Tree:
+        """Create a new independent persistent B+ tree with the given unique name."""
+        self._ensure_open()
+        validate_tree_name(name)
+
+        with self._mutation_lock:
+            if self.catalog.has_tree(name):
+                raise TreeAlreadyExistsError(f"Tree '{name}' already exists")
+
+            from objectdb.btree import encode_leaf_node
+            empty_leaf = encode_leaf_node([], [])
+
+            if self._active_transaction is not None:
+                tx = self._active_transaction
+                root_page_id = tx.allocate_page()
+                tx.write_page(root_page_id, empty_leaf)
+                self.catalog.create_tree(
+                    name,
+                    root_page_id,
+                    writer=tx.page_writer,
+                    tx_id=tx.transaction_id,
+                )
+                tree_adapter = NamedTreeTransactionPageAdapter(tx, self.page_manager, None)
+                btree = PersistentBTree(tree_adapter)
+                btree.root_page_id = root_page_id
+                tree_obj = Tree(name, self, btree)
+                tree_adapter.tree = tree_obj
+                self._trees[name] = tree_obj
+                return tree_obj
+
+            tx = None
+            try:
+                tx = self._begin_transaction()
+                root_page_id = tx.allocate_page()
+                tx.write_page(root_page_id, empty_leaf)
+                self.catalog.create_tree(
+                    name,
+                    root_page_id,
+                    writer=tx.page_writer,
+                    tx_id=tx.transaction_id,
+                )
+                tx.commit()
+            except Exception:
+                if (
+                    tx is not None
+                    and tx.state == TransactionState.ACTIVE
+                    and not getattr(self.wal, "_is_broken", False)
+                ):
+                    try:
+                        tx.rollback()
+                    except Exception:
+                        self.is_poisoned = True
+                    finally:
+                        header = read_header(self.page_manager.read_page(0))
+                        self.catalog.catalog_page_id = header.get("catalog_page_id", 0)
+                        self.catalog.load()
+                else:
+                    self.is_poisoned = True
+                raise
+
+            tree_adapter = NamedTreePageAdapter(self, name)
+            btree = PersistentBTree(tree_adapter)
+            btree.root_page_id = root_page_id
+            tree_obj = Tree(name, self, btree)
+            self._trees[name] = tree_obj
+            return tree_obj
+
+    def open_tree(self, name: str) -> Tree:
+        """Open an existing persistent B+ tree by name."""
+        self._ensure_open()
+        validate_tree_name(name)
+
+        with self._mutation_lock:
+            if not self.catalog.has_tree(name):
+                raise TreeNotFoundError(f"Tree '{name}' does not exist")
+
+            if name in self._trees:
+                return self._trees[name]
+
+            root_page_id = self.catalog.get_root(name)
+            if self._active_transaction is not None:
+                tree_adapter = NamedTreeTransactionPageAdapter(
+                    self._active_transaction,
+                    self.page_manager,
+                    None,
+                )
+            else:
+                tree_adapter = NamedTreePageAdapter(self, name)
+
+            btree = PersistentBTree(tree_adapter)
+            btree.root_page_id = root_page_id
+            tree_obj = Tree(name, self, btree)
+            if isinstance(tree_adapter, NamedTreeTransactionPageAdapter):
+                tree_adapter.tree = tree_obj
+            self._trees[name] = tree_obj
+            return tree_obj
+
+    def get_tree(self, name: str) -> Tree:
+        """Alias for open_tree(name)."""
+        return self.open_tree(name)
+
+    def get_or_create_tree(self, name: str) -> Tree:
+        """Open tree if it exists, otherwise create it."""
+        self._ensure_open()
+        validate_tree_name(name)
+
+        with self._mutation_lock:
+            if self.catalog.has_tree(name):
+                return self.open_tree(name)
+            return self.create_tree(name)
+
+    def list_trees(self) -> list[str]:
+        """Return a sorted list of all persistent tree names."""
+        self._ensure_open()
+        with self._mutation_lock:
+            return self.catalog.list_trees()
+
+    def drop_tree(self, name: str) -> bool:
+        """Remove a tree from the database catalog. Returns True if removed, False if not found."""
+        self._ensure_open()
+        validate_tree_name(name)
+
+        with self._mutation_lock:
+            if not self.catalog.has_tree(name):
+                return False
+
+            if self._active_transaction is not None:
+                tx = self._active_transaction
+                dropped = self.catalog.drop_tree(
+                    name,
+                    writer=tx.page_writer,
+                    tx_id=tx.transaction_id,
+                )
+                self._trees.pop(name, None)
+                return dropped
+
+            tx = None
+            try:
+                tx = self._begin_transaction()
+                dropped = self.catalog.drop_tree(
+                    name,
+                    writer=tx.page_writer,
+                    tx_id=tx.transaction_id,
+                )
+                tx.commit()
+                self._trees.pop(name, None)
+                return dropped
+            except Exception:
+                if (
+                    tx is not None
+                    and tx.state == TransactionState.ACTIVE
+                    and not getattr(self.wal, "_is_broken", False)
+                ):
+                    try:
+                        tx.rollback()
+                    except Exception:
+                        self.is_poisoned = True
+                    finally:
+                        self.catalog.load()
+                else:
+                    self.is_poisoned = True
+                raise
+
     def check_integrity(self, raise_on_error: bool = False) -> dict:
         """
         Validate tree integrity, reachable pages, child bounds, key ordering,
@@ -424,9 +611,11 @@ class ObjectDB:
             header_page = self.page_manager.read_page(0)
             header = read_header(header_page)
             root_page_id = header["root_page_id"]
+            catalog_page_id = header.get("catalog_page_id", 0)
         except Exception as exc:
             errors.append(f"Invalid header page: {exc}")
             root_page_id = NO_ROOT_PAGE
+            catalog_page_id = 0
 
         self.page_manager.file.seek(0, 2)
         db_file_size = self.page_manager.file.tell()
@@ -439,130 +628,170 @@ class ObjectDB:
         self.segment.file.seek(0, 2)
         segment_size = self.segment.file.tell()
 
-        # 2. Traverse B+ tree from root
-        if root_page_id != NO_ROOT_PAGE:
-            if root_page_id >= total_pages or root_page_id < 1:
+        reachable_pages.add(0)  # Header page
+
+        def _validate_btree(btree_root_id: int, tree_label: str):
+            nonlocal total_keys
+            if btree_root_id == NO_ROOT_PAGE:
+                return
+
+            if btree_root_id >= total_pages or btree_root_id < 1:
                 errors.append(
-                    f"Root page ID {root_page_id} is out of bounds [1, {total_pages - 1}]"
+                    f"{tree_label} root page ID {btree_root_id} is out of bounds [1, {total_pages - 1}]"
                 )
-            else:
-                reachable_pages.add(0)  # Header page
-                queue = [(root_page_id, None, None, 0)]  # (page_id, min_key, max_key, depth)
-                leaf_depths = set()
+                return
 
-                while queue:
-                    page_id, min_bound, max_bound, depth = queue.pop(0)
+            queue = [(btree_root_id, None, None, 0)]  # (page_id, min_key, max_key, depth)
+            leaf_depths = set()
 
-                    if page_id in reachable_pages:
-                        errors.append(
-                            f"Cycle detected: page {page_id} visited more than once"
-                        )
-                        continue
+            while queue:
+                page_id, min_bound, max_bound, depth = queue.pop(0)
 
-                    reachable_pages.add(page_id)
-
-                    try:
-                        page_data = self.page_manager.read_page(page_id)
-                    except Exception as exc:
-                        errors.append(f"Failed to read page {page_id}: {exc}")
-                        continue
-
-                    node_type, _ = struct.unpack_from("<BH", page_data, 0)
-
-                    if node_type == LEAF_NODE_TYPE:
-                        leaf_depths.add(depth)
-                        try:
-                            keys, records = decode_leaf_node(page_data)
-                        except Exception as exc:
-                            errors.append(f"Leaf page {page_id} decode error: {exc}")
-                            continue
-
-                        if len(keys) != len(records):
-                            errors.append(
-                                f"Leaf page {page_id} has mismatched keys ({len(keys)}) and records ({len(records)})"
-                            )
-
-                        total_keys += len(keys)
-
-                        # Check keys strictly sorted
-                        for i in range(len(keys) - 1):
-                            if keys[i] >= keys[i + 1]:
-                                errors.append(
-                                    f"Leaf page {page_id} keys not strictly sorted: {keys[i]} >= {keys[i+1]}"
-                                )
-
-                        # Check bounds
-                        if min_bound is not None and keys and keys[0] < min_bound:
-                            errors.append(
-                                f"Leaf page {page_id} has key {keys[0]} below min bound {min_bound}"
-                            )
-                        if max_bound is not None and keys and keys[-1] >= max_bound:
-                            errors.append(
-                                f"Leaf page {page_id} has key {keys[-1]} exceeding max bound {max_bound}"
-                            )
-
-                        # Validate records
-                        for record in records:
-                            try:
-                                seg_id, offset, size = decode_record(record)
-                                if seg_id != 0:
-                                    errors.append(
-                                        f"Leaf page {page_id} record references invalid segment ID {seg_id}"
-                                    )
-                                if offset + size > segment_size:
-                                    errors.append(
-                                        f"Leaf page {page_id} record range [{offset}, {offset+size}) exceeds segment size {segment_size}"
-                                    )
-                            except Exception as exc:
-                                errors.append(f"Leaf page {page_id} record decode error: {exc}")
-
-                    elif node_type == INTERNAL_NODE_TYPE:
-                        try:
-                            keys, child_ids = decode_internal_node(page_data)
-                        except Exception as exc:
-                            errors.append(f"Internal page {page_id} decode error: {exc}")
-                            continue
-
-                        if len(child_ids) != len(keys) + 1:
-                            errors.append(
-                                f"Internal page {page_id} child count {len(child_ids)} != key count {len(keys)} + 1"
-                            )
-
-                        # Check keys strictly sorted
-                        for i in range(len(keys) - 1):
-                            if keys[i] >= keys[i + 1]:
-                                errors.append(
-                                    f"Internal page {page_id} keys not strictly sorted: {keys[i]} >= {keys[i+1]}"
-                                )
-
-                        # Check bounds
-                        if min_bound is not None and keys and keys[0] < min_bound:
-                            errors.append(
-                                f"Internal page {page_id} separator {keys[0]} below min bound {min_bound}"
-                            )
-                        if max_bound is not None and keys and keys[-1] >= max_bound:
-                            errors.append(
-                                f"Internal page {page_id} separator {keys[-1]} exceeding max bound {max_bound}"
-                            )
-
-                        # Check child bounds & enqueue
-                        for i, child_id in enumerate(child_ids):
-                            if child_id <= 0 or child_id >= total_pages:
-                                errors.append(
-                                    f"Internal page {page_id} has child {child_id} out of bounds [1, {total_pages - 1}]"
-                                )
-                                continue
-
-                            child_min = min_bound if i == 0 else keys[i - 1]
-                            child_max = keys[i] if i < len(keys) else max_bound
-                            queue.append((child_id, child_min, child_max, depth + 1))
-                    else:
-                        errors.append(f"Page {page_id} has invalid node type {node_type}")
-
-                if len(leaf_depths) > 1:
+                if page_id in reachable_pages:
                     errors.append(
-                        f"B+ tree is unbalanced: leaves found at varying depths {sorted(leaf_depths)}"
+                        f"Cycle detected: page {page_id} visited more than once ({tree_label})"
                     )
+                    continue
+
+                reachable_pages.add(page_id)
+
+                try:
+                    page_data = self.page_manager.read_page(page_id)
+                except Exception as exc:
+                    errors.append(f"Failed to read page {page_id} ({tree_label}): {exc}")
+                    continue
+
+                node_type, _ = struct.unpack_from("<BH", page_data, 0)
+
+                if node_type == LEAF_NODE_TYPE:
+                    leaf_depths.add(depth)
+                    try:
+                        keys, records = decode_leaf_node(page_data)
+                    except Exception as exc:
+                        errors.append(f"Leaf page {page_id} decode error ({tree_label}): {exc}")
+                        continue
+
+                    if len(keys) != len(records):
+                        errors.append(
+                            f"Leaf page {page_id} has mismatched keys ({len(keys)}) and records ({len(records)})"
+                        )
+
+                    total_keys += len(keys)
+
+                    # Check keys strictly sorted
+                    for i in range(len(keys) - 1):
+                        if keys[i] >= keys[i + 1]:
+                            errors.append(
+                                f"Leaf page {page_id} keys not strictly sorted: {keys[i]} >= {keys[i+1]} ({tree_label})"
+                            )
+
+                    # Check bounds
+                    if min_bound is not None and keys and keys[0] < min_bound:
+                        errors.append(
+                            f"Leaf page {page_id} has key {keys[0]} below min bound {min_bound} ({tree_label})"
+                        )
+                    if max_bound is not None and keys and keys[-1] >= max_bound:
+                        errors.append(
+                            f"Leaf page {page_id} has key {keys[-1]} exceeding max bound {max_bound} ({tree_label})"
+                        )
+
+                    # Validate records
+                    for record in records:
+                        try:
+                            seg_id, offset, size = decode_record(record)
+                            if seg_id != 0:
+                                errors.append(
+                                    f"Leaf page {page_id} record references invalid segment ID {seg_id} ({tree_label})"
+                                )
+                            if offset + size > segment_size:
+                                errors.append(
+                                    f"Leaf page {page_id} record range [{offset}, {offset+size}) exceeds segment size {segment_size} ({tree_label})"
+                                )
+                        except Exception as exc:
+                            errors.append(f"Leaf page {page_id} record decode error ({tree_label}): {exc}")
+
+                elif node_type == INTERNAL_NODE_TYPE:
+                    try:
+                        keys, child_ids = decode_internal_node(page_data)
+                    except Exception as exc:
+                        errors.append(f"Internal page {page_id} decode error ({tree_label}): {exc}")
+                        continue
+
+                    if len(child_ids) != len(keys) + 1:
+                        errors.append(
+                            f"Internal page {page_id} child count {len(child_ids)} != key count {len(keys)} + 1 ({tree_label})"
+                        )
+
+                    # Check keys strictly sorted
+                    for i in range(len(keys) - 1):
+                        if keys[i] >= keys[i + 1]:
+                            errors.append(
+                                f"Internal page {page_id} keys not strictly sorted: {keys[i]} >= {keys[i+1]} ({tree_label})"
+                            )
+
+                    # Check bounds
+                    if min_bound is not None and keys and keys[0] < min_bound:
+                        errors.append(
+                            f"Internal page {page_id} separator {keys[0]} below min bound {min_bound} ({tree_label})"
+                        )
+                    if max_bound is not None and keys and keys[-1] >= max_bound:
+                        errors.append(
+                            f"Internal page {page_id} separator {keys[-1]} exceeding max bound {max_bound} ({tree_label})"
+                        )
+
+                    # Check child bounds & enqueue
+                    for i, child_id in enumerate(child_ids):
+                        if child_id <= 0 or child_id >= total_pages:
+                            errors.append(
+                                f"Internal page {page_id} has child {child_id} out of bounds [1, {total_pages - 1}] ({tree_label})"
+                            )
+                            continue
+
+                        child_min = min_bound if i == 0 else keys[i - 1]
+                        child_max = keys[i] if i < len(keys) else max_bound
+                        queue.append((child_id, child_min, child_max, depth + 1))
+                else:
+                    errors.append(f"Page {page_id} has invalid node type {node_type} ({tree_label})")
+
+            if len(leaf_depths) > 1:
+                errors.append(
+                    f"B+ tree is unbalanced: leaves found at varying depths {sorted(leaf_depths)} ({tree_label})"
+                )
+
+        # 2. Traverse default B+ tree from root if present
+        if root_page_id != NO_ROOT_PAGE:
+            _validate_btree(root_page_id, "Default tree")
+
+        # 3. Traverse catalog and all named trees if present
+        if catalog_page_id != 0:
+            curr_cat_id = catalog_page_id
+            cat_visited = set()
+            while curr_cat_id != 0:
+                if curr_cat_id in cat_visited:
+                    errors.append(f"Cycle in catalog page chain at page {curr_cat_id}")
+                    break
+                cat_visited.add(curr_cat_id)
+
+                if curr_cat_id in reachable_pages:
+                    errors.append(f"Catalog page {curr_cat_id} overlaps with another page")
+                    break
+                reachable_pages.add(curr_cat_id)
+
+                if curr_cat_id >= total_pages or curr_cat_id < 1:
+                    errors.append(f"Catalog page ID {curr_cat_id} out of bounds [1, {total_pages - 1}]")
+                    break
+
+                try:
+                    cat_data = self.page_manager.read_page(curr_cat_id)
+                    entries, next_cat_id = decode_catalog_page(cat_data)
+                except Exception as exc:
+                    errors.append(f"Catalog page {curr_cat_id} decode error: {exc}")
+                    break
+
+                for tree_name, tree_root in entries:
+                    _validate_btree(tree_root, f"Tree '{tree_name}'")
+
+                curr_cat_id = next_cat_id
 
         result = {
             "valid": len(errors) == 0,
@@ -723,6 +952,9 @@ class ObjectDB:
         if _ACTIVE_INSTANCES.get(canonical_path) is self:
             _ACTIVE_INSTANCES.pop(canonical_path, None)
 
+        self._trees.clear()
+        self.catalog = None
+
         try:
             if self._active_transaction is not None:
                 try:
@@ -769,6 +1001,8 @@ class ObjectDB:
             return
         self.is_open = False
         self._active_transaction = None
+        self._trees.clear()
+        self.catalog = None
         canonical_path = str(self.path.resolve())
         if _ACTIVE_INSTANCES.get(canonical_path) is self:
             _ACTIVE_INSTANCES.pop(canonical_path, None)
@@ -815,6 +1049,7 @@ class _DatabaseTransactionContext:
         self.db = db
         self.tx = None
         self.old_adapter = None
+        self.old_tree_adapters = {}
         self._lock_acquired = False
 
     def __enter__(self):
@@ -829,10 +1064,17 @@ class _DatabaseTransactionContext:
             from objectdb.transaction import TransactionPageAdapter
 
             self.tx = self.db._begin_transaction()
+            self.db._active_transaction = self.tx
+
             adapter = TransactionPageAdapter(self.tx, self.db.page_manager, self.db.tree)
             self.old_adapter = self.db.tree.page_manager
             self.db.tree.page_manager = adapter
-            self.db._active_transaction = self.tx
+
+            self.old_tree_adapters = {}
+            for name, t in self.db._trees.items():
+                self.old_tree_adapters[name] = t.btree.page_manager
+                t.btree.page_manager = NamedTreeTransactionPageAdapter(self.tx, self.db.page_manager, t)
+
             return self.tx
         except Exception:
             if self._lock_acquired:
@@ -854,6 +1096,14 @@ class _DatabaseTransactionContext:
                         if self.db.page_manager is not None:
                             header = read_header(self.db.page_manager.read_page(0))
                             self.db.tree.root_page_id = header["root_page_id"]
+                            if self.db.catalog is not None:
+                                self.db.catalog.catalog_page_id = header.get("catalog_page_id", 0)
+                                self.db.catalog.load()
+                                for name in list(self.db._trees.keys()):
+                                    if not self.db.catalog.has_tree(name):
+                                        del self.db._trees[name]
+                                    else:
+                                        self.db._trees[name].btree.root_page_id = self.db.catalog.get_root(name)
                 else:
                     self.db.is_poisoned = True
             else:
@@ -866,6 +1116,9 @@ class _DatabaseTransactionContext:
         finally:
             if self.db.tree is not None:
                 self.db.tree.page_manager = self.old_adapter
+            for name, old_ad in getattr(self, "old_tree_adapters", {}).items():
+                if name in self.db._trees:
+                    self.db._trees[name].btree.page_manager = old_ad
             self.db._active_transaction = None
             if self._lock_acquired:
                 self.db._mutation_lock.release()

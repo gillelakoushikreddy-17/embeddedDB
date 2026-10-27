@@ -15,6 +15,7 @@ class RecoveryManager:
         "PAGE_BEFORE_IMAGE",
         "PAGE_ALLOCATED",
         "ROOT_PAGE_BEFORE_IMAGE",
+        "CATALOG_PAGE_BEFORE_IMAGE",
     }
 
     def __init__(self, wal):
@@ -58,6 +59,7 @@ class RecoveryManager:
                     "before_images": [],
                     "allocated_pages": [],
                     "root_before_images": [],
+                    "catalog_before_images": [],
                 }
 
             transaction = transactions[transaction_id]
@@ -224,6 +226,44 @@ class RecoveryManager:
 
                 transaction["root_before_images"].append(data)
 
+            elif record_type == "CATALOG_PAGE_BEFORE_IMAGE":
+                if not transaction["begun"]:
+                    raise ValueError(
+                        "CATALOG_PAGE_BEFORE_IMAGE without BEGIN"
+                    )
+
+                if transaction["committed"]:
+                    raise ValueError(
+                        "CATALOG_PAGE_BEFORE_IMAGE after COMMIT"
+                    )
+
+                if transaction["rolled_back"]:
+                    raise ValueError(
+                        "CATALOG_PAGE_BEFORE_IMAGE after ROLLBACK"
+                    )
+
+                orig_cat = data.get("original_catalog_page_id")
+                if (
+                    not isinstance(orig_cat, int)
+                    or isinstance(orig_cat, bool)
+                    or orig_cat < 0
+                ):
+                    raise ValueError(
+                        "Invalid original catalog page ID in before-image"
+                    )
+
+                new_cat = data.get("new_catalog_page_id")
+                if (
+                    not isinstance(new_cat, int)
+                    or isinstance(new_cat, bool)
+                    or new_cat < 0
+                ):
+                    raise ValueError(
+                        "Invalid new catalog page ID in before-image"
+                    )
+
+                transaction["catalog_before_images"].append(data)
+
         committed = []
         rolled_back = []
         incomplete = []
@@ -257,6 +297,7 @@ class RecoveryManager:
         before_images = []
         allocated_pages = []
         root_before_images = []
+        catalog_before_images = []
 
         for record in records:
             record_type = record.get("type")
@@ -274,6 +315,9 @@ class RecoveryManager:
 
             elif record_type == "ROOT_PAGE_BEFORE_IMAGE":
                 root_before_images.append(data)
+
+            elif record_type == "CATALOG_PAGE_BEFORE_IMAGE":
+                catalog_before_images.append(data)
 
         incomplete_allocated_ids = {data["page_id"] for data in allocated_pages}
 
@@ -301,6 +345,11 @@ class RecoveryManager:
                     page_writer.restore_root_page_id(
                         data["original_root_page_id"],
                     )
+            elif record_type == "CATALOG_PAGE_BEFORE_IMAGE":
+                if hasattr(page_writer, "restore_catalog_page_id"):
+                    page_writer.restore_catalog_page_id(
+                        data["original_catalog_page_id"],
+                    )
 
         # Physically reclaim uncommitted allocated pages from the database file
         if allocated_pages and hasattr(page_writer, "reclaim_allocated_pages"):
@@ -308,7 +357,7 @@ class RecoveryManager:
                 [data["page_id"] for data in allocated_pages]
             )
 
-        if before_images or root_before_images or allocated_pages:
+        if before_images or root_before_images or catalog_before_images or allocated_pages:
             page_writer.sync()
 
         return {

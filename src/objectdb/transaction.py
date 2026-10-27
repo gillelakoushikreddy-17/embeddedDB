@@ -62,6 +62,15 @@ class Transaction:
             root_page_id,
         )
 
+    def update_catalog_page_id(self, catalog_page_id):
+        """Update the catalog page ID through the transactional page writer."""
+        self._ensure_active()
+
+        self.page_writer.update_catalog_page_id(
+            self.transaction_id,
+            catalog_page_id,
+        )
+
     def read_page(self, page_id):
         """Read a page through the underlying page manager."""
         return self.page_writer.page_manager.read_page(page_id)
@@ -128,6 +137,11 @@ class Transaction:
                     if hasattr(self.page_writer, "restore_root_page_id"):
                         self.page_writer.restore_root_page_id(
                             record_data["original_root_page_id"],
+                        )
+                elif record_type == "CATALOG_PAGE_BEFORE_IMAGE":
+                    if hasattr(self.page_writer, "restore_catalog_page_id"):
+                        self.page_writer.restore_catalog_page_id(
+                            record_data["original_catalog_page_id"],
                         )
 
             # Reclaim pages allocated by this rolled-back transaction
