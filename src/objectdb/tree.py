@@ -37,19 +37,36 @@ class NamedTreePageAdapter:
         return self.db.page_manager.read_page(page_id)
 
     def write_page(self, page_id: int, data: bytes) -> None:
-        self.db.page_manager.write_page(page_id, data)
+        if self.db._active_transaction is not None:
+            self.db._active_transaction.write_page(page_id, data)
+        else:
+            self.db.page_manager.write_page(page_id, data)
 
     def allocate_page(self) -> int:
-        return self.db.page_manager.allocate_page()
+        if self.db._active_transaction is not None:
+            return self.db._active_transaction.allocate_page()
+        else:
+            return self.db.page_manager.allocate_page()
 
     def update_root_page_id(self, root_page_id: int) -> None:
-        self.db.catalog.update_root(
-            self.tree_name,
-            root_page_id,
-            writer=self.db.page_manager,
-        )
+        if self.db._active_transaction is not None:
+            tx = self.db._active_transaction
+            self.db.catalog.update_root(
+                self.tree_name,
+                root_page_id,
+                writer=tx.page_writer,
+                tx_id=tx.transaction_id,
+            )
+        else:
+            self.db.catalog.update_root(
+                self.tree_name,
+                root_page_id,
+                writer=self.db.page_manager,
+            )
         if self.tree_name in self.db._trees:
-            self.db._trees[self.tree_name].btree.root_page_id = root_page_id
+            t = self.db._trees.get(self.tree_name)
+            if t is not None:
+                t.btree.root_page_id = root_page_id
 
     @property
     def file(self):

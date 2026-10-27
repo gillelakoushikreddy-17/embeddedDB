@@ -21,9 +21,10 @@ class RecoveryManager:
     def __init__(self, wal):
         self.wal = wal
 
-    def analyze(self):
+    def analyze(self, records=None):
         """Identify committed, rolled-back, and incomplete transactions."""
-        records = self.wal.read_all()
+        if records is None:
+            records = self.wal.read_all()
         transactions = {}
 
         for record in records:
@@ -290,9 +291,9 @@ class RecoveryManager:
         Allocated pages are reported for future reclamation handling,
         but this method does not physically remove them.
         """
-        analysis = self.analyze()
-        incomplete_transactions = set(analysis["incomplete"])
         records = self.wal.read_all()
+        analysis = self.analyze(records=records)
+        incomplete_transactions = set(analysis["incomplete"])
 
         before_images = []
         allocated_pages = []
@@ -372,4 +373,6 @@ class RecoveryManager:
                 }
                 for data in allocated_pages
             ],
+            "max_transaction_id": max(analysis["transactions"].keys(), default=0),
+            "analysis": analysis,
         }

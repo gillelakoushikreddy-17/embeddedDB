@@ -162,6 +162,8 @@ class TreeCatalog:
         self._page_chain: list[int] = []
         # Map: page_id -> list of (name, root_page_id)
         self._page_entries: dict[int, list[tuple[str, int]]] = {}
+        # Map: page_id -> next_page_id (for O(1) page linkage lookup)
+        self._page_next: dict[int, int] = {}
         self._is_loaded = False
 
     def load(self) -> None:
@@ -169,6 +171,7 @@ class TreeCatalog:
         self._entries.clear()
         self._page_chain.clear()
         self._page_entries.clear()
+        self._page_next.clear()
 
         if self.catalog_page_id == 0:
             self._is_loaded = True
@@ -187,6 +190,7 @@ class TreeCatalog:
 
             self._page_chain.append(curr_page_id)
             self._page_entries[curr_page_id] = list(entries)
+            self._page_next[curr_page_id] = next_page_id
 
             for idx, (name, root_page_id) in enumerate(entries):
                 if name in self._entries:
@@ -259,6 +263,7 @@ class TreeCatalog:
             self.catalog_page_id = cat_page_id
             self._page_chain = [cat_page_id]
             self._page_entries[cat_page_id] = [(name, root_page_id)]
+            self._page_next[cat_page_id] = 0
             self._entries[name] = {
                 "root_page_id": root_page_id,
                 "page_id": cat_page_id,
@@ -285,6 +290,7 @@ class TreeCatalog:
                 self.page_manager.write_page(last_page_id, page_data)
 
             self._page_entries[last_page_id] = current_entries
+            self._page_next[last_page_id] = 0
             self._entries[name] = {
                 "root_page_id": root_page_id,
                 "page_id": last_page_id,
@@ -313,6 +319,8 @@ class TreeCatalog:
 
             self._page_chain.append(new_page_id)
             self._page_entries[new_page_id] = [(name, root_page_id)]
+            self._page_next[last_page_id] = new_page_id
+            self._page_next[new_page_id] = 0
             self._entries[name] = {
                 "root_page_id": root_page_id,
                 "page_id": new_page_id,
@@ -339,9 +347,7 @@ class TreeCatalog:
         entries = list(self._page_entries[page_id])
         entries[entry_idx] = (name, new_root_page_id)
 
-        chain_idx = self._page_chain.index(page_id)
-        next_page_id = self._page_chain[chain_idx + 1] if chain_idx + 1 < len(self._page_chain) else 0
-
+        next_page_id = self._page_next.get(page_id, 0)
         page_data = encode_catalog_page(entries, next_page_id=next_page_id)
 
         if tx_id is not None:
@@ -367,9 +373,7 @@ class TreeCatalog:
 
         entries = [(n, r) for n, r in self._page_entries[page_id] if n != name]
 
-        chain_idx = self._page_chain.index(page_id)
-        next_page_id = self._page_chain[chain_idx + 1] if chain_idx + 1 < len(self._page_chain) else 0
-
+        next_page_id = self._page_next.get(page_id, 0)
         page_data = encode_catalog_page(entries, next_page_id=next_page_id)
 
         if tx_id is not None:

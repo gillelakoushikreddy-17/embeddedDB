@@ -38,6 +38,8 @@ tests/test_initialization_cleanup.py
 tests/test_integrity_and_backup.py
 tests/test_internal_rebalancing.py
 tests/test_multi_tree.py
+tests/test_multi_tree_scalability.py
+tests/test_multi_tree_stress.py
 tests/test_objectdb_api.py
 tests/test_objectdb_persistence.py
 tests/test_objectdb_startup_recovery.py
