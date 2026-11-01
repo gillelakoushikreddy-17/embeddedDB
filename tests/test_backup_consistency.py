@@ -6,8 +6,8 @@ import time
 from unittest.mock import patch
 from pathlib import Path
 import pytest
-from objectdb import ObjectDB
-from objectdb import database
+from embeddeddb import EmbeddedDB
+from embeddeddb import database
 
 
 def test_backup_of_idle_database(tmp_path):
@@ -15,7 +15,7 @@ def test_backup_of_idle_database(tmp_path):
     db_path = tmp_path / "idle_source"
     backup_path = tmp_path / "idle_backup"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     for i in range(25):
         db.put(i, f"payload_{i}".encode("ascii"))
@@ -24,7 +24,7 @@ def test_backup_of_idle_database(tmp_path):
     assert res == backup_path
 
     # Verify backup is complete and valid
-    backup_db = ObjectDB(backup_path)
+    backup_db = EmbeddedDB(backup_path)
     backup_db.open()
     try:
         report = backup_db.check_integrity(raise_on_error=True)
@@ -42,7 +42,7 @@ def test_backup_of_closed_database(tmp_path):
     db_path = tmp_path / "closed_source"
     backup_path = tmp_path / "closed_backup"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     for i in range(15):
         db.put(i, f"closed_val_{i}".encode("ascii"))
@@ -55,7 +55,7 @@ def test_backup_of_closed_database(tmp_path):
     assert res == backup_path
 
     # Open backup and verify integrity
-    backup_db = ObjectDB(backup_path)
+    backup_db = EmbeddedDB(backup_path)
     backup_db.open()
     try:
         assert backup_db.check_integrity(raise_on_error=True)["valid"] is True
@@ -70,7 +70,7 @@ def test_backup_blocks_concurrent_writer_thread(tmp_path):
     db_path = tmp_path / "thread_source"
     backup_path = tmp_path / "thread_backup"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     for i in range(10):
         db.put(i, f"initial_{i}".encode("ascii"))
@@ -107,7 +107,7 @@ def test_backup_blocks_concurrent_writer_thread(tmp_path):
     assert thread_write_time[0] >= backup_finish_time[0] - 0.05
 
     # Verify the backup snapshot has the pre-write state (key 99 not present)
-    backup_db = ObjectDB(backup_path)
+    backup_db = EmbeddedDB(backup_path)
     backup_db.open()
     try:
         assert backup_db.get(99) is None
@@ -125,7 +125,7 @@ def test_backup_attempted_during_active_transaction_rejected(tmp_path):
     db_path = tmp_path / "active_tx_source"
     backup_path = tmp_path / "active_tx_backup"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     with db.transaction():
@@ -144,7 +144,7 @@ def test_injected_error_during_file_copy_cleans_up_and_leaves_source_intact(tmp_
     db_path = tmp_path / "copy_err_source"
     backup_path = tmp_path / "copy_err_backup"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     for i in range(10):
         db.put(i, f"src_val_{i}".encode("ascii"))
@@ -178,7 +178,7 @@ def test_restoration_from_completed_backup_validates_metadata_and_segment(tmp_pa
     db_path = tmp_path / "restore_source"
     backup_path = tmp_path / "restore_backup"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     for i in range(40):
         db.put(i, f"content_{i}_{i * 10}".encode("ascii"))
@@ -191,7 +191,7 @@ def test_restoration_from_completed_backup_validates_metadata_and_segment(tmp_pa
     db.close()
 
     # Open backup
-    backup_db = ObjectDB(backup_path)
+    backup_db = EmbeddedDB(backup_path)
     backup_db.open()
     try:
         assert backup_db.check_integrity(raise_on_error=True)["valid"] is True
@@ -205,7 +205,7 @@ def test_restoration_from_completed_backup_validates_metadata_and_segment(tmp_pa
         backup_db.close()
 
     # Source database is unaffected by backup mutations
-    reopened_src = ObjectDB(db_path)
+    reopened_src = EmbeddedDB(db_path)
     reopened_src.open()
     try:
         assert reopened_src.get(0) is None
@@ -224,13 +224,13 @@ def test_backup_replacement_failure_preserves_previous_valid_backup(tmp_path):
     db_path = tmp_path / "replace_src"
     backup_path = tmp_path / "replace_dst"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"initial_backup_val")
     db.backup(backup_path)
 
     # Verify initial backup is valid
-    b1 = ObjectDB(backup_path)
+    b1 = EmbeddedDB(backup_path)
     b1.open()
     assert b1.get(1) == b"initial_backup_val"
     b1.close()
@@ -253,7 +253,7 @@ def test_backup_replacement_failure_preserves_previous_valid_backup(tmp_path):
 
     # Verify that the previous backup at backup_path is STILL INTACT and VALID!
     assert backup_path.exists()
-    b2 = ObjectDB(backup_path)
+    b2 = EmbeddedDB(backup_path)
     b2.open()
     try:
         assert b2.check_integrity()["valid"] is True
@@ -271,7 +271,7 @@ def test_backup_replacement_failure_preserves_previous_valid_backup(tmp_path):
 
     # Verify that a subsequent backup succeeds normally
     db.backup(backup_path)
-    b3 = ObjectDB(backup_path)
+    b3 = EmbeddedDB(backup_path)
     b3.open()
     try:
         assert b3.get(1) == b"initial_backup_val"
@@ -294,13 +294,13 @@ def test_backup_replacement_and_restoration_double_failure_preserves_old_backup(
     db_path = tmp_path / "double_fail_src"
     backup_path = tmp_path / "double_fail_dst"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"initial_valid_backup_payload")
     db.backup(backup_path)
 
     # Verify initial backup is valid
-    b1 = ObjectDB(backup_path)
+    b1 = EmbeddedDB(backup_path)
     b1.open()
     assert b1.get(1) == b"initial_valid_backup_payload"
     b1.close()
@@ -341,10 +341,10 @@ def test_backup_replacement_and_restoration_double_failure_preserves_old_backup(
     preserved_old_backup = old_backups[0]
 
     # Requirement 6: Verify old backup files remain available and valid
-    assert (preserved_old_backup / "objectdb.data").exists()
-    assert (preserved_old_backup / "objectdb.wal").exists()
+    assert (preserved_old_backup / "embeddeddb.data").exists()
+    assert (preserved_old_backup / "embeddeddb.wal").exists()
 
-    b_preserved = ObjectDB(preserved_old_backup)
+    b_preserved = EmbeddedDB(preserved_old_backup)
     b_preserved.open()
     try:
         assert b_preserved.check_integrity()["valid"] is True
@@ -355,7 +355,7 @@ def test_backup_replacement_and_restoration_double_failure_preserves_old_backup(
 
     # Verify manual restoration works
     preserved_old_backup.rename(backup_path)
-    b_restored = ObjectDB(backup_path)
+    b_restored = EmbeddedDB(backup_path)
     b_restored.open()
     try:
         assert b_restored.check_integrity()["valid"] is True
@@ -366,7 +366,7 @@ def test_backup_replacement_and_restoration_double_failure_preserves_old_backup(
 
     # Requirement 7: Preserve existing successful replacement behavior
     db.backup(backup_path)
-    b_replaced = ObjectDB(backup_path)
+    b_replaced = EmbeddedDB(backup_path)
     b_replaced.open()
     try:
         assert b_replaced.check_integrity()["valid"] is True
@@ -394,7 +394,7 @@ def test_backup_staging_dir_fsync_genuine_io_failure_propagates_and_cleans_up(tm
     db_path = tmp_path / "sync_fail_src"
     backup_path = tmp_path / "sync_fail_dst"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"val1")
 
@@ -408,7 +408,7 @@ def test_backup_staging_dir_fsync_genuine_io_failure_propagates_and_cleans_up(tm
             raise io_err
         return original_sync(path)
 
-    with patch("objectdb.database._sync_directory", side_effect=failing_sync):
+    with patch("embeddeddb.database._sync_directory", side_effect=failing_sync):
         with pytest.raises(OSError, match="Simulated disk hardware I/O error") as exc_info:
             db.backup(backup_path)
         assert exc_info.value is io_err
@@ -435,13 +435,13 @@ def test_backup_parent_dir_fsync_genuine_io_failure_restores_previous_valid_back
     db_path = tmp_path / "parent_sync_src"
     backup_path = tmp_path / "parent_sync_dst"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"original_backup_payload")
     db.backup(backup_path)
 
     # Verify initial backup
-    b1 = ObjectDB(backup_path)
+    b1 = EmbeddedDB(backup_path)
     b1.open()
     assert b1.get(1) == b"original_backup_payload"
     b1.close()
@@ -458,14 +458,14 @@ def test_backup_parent_dir_fsync_genuine_io_failure_restores_previous_valid_back
             raise io_err
         return original_sync(path)
 
-    with patch("objectdb.database._sync_directory", side_effect=failing_parent_sync):
+    with patch("embeddeddb.database._sync_directory", side_effect=failing_parent_sync):
         with pytest.raises(OSError, match="Disk I/O error syncing parent directory") as exc_info:
             db.backup(backup_path)
         assert exc_info.value is io_err
 
     # Verify previous backup is restored at backup_path and completely intact
     assert backup_path.exists()
-    b_restored = ObjectDB(backup_path)
+    b_restored = EmbeddedDB(backup_path)
     b_restored.open()
     try:
         assert b_restored.check_integrity()["valid"] is True
@@ -492,7 +492,7 @@ def test_backup_directory_sync_unsupported_platform_succeeds_gracefully(tmp_path
     db_path = tmp_path / "unsupported_sync_src"
     backup_path = tmp_path / "unsupported_sync_dst"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     for i in range(10):
         db.put(i, f"payload_{i}".encode())
@@ -501,12 +501,12 @@ def test_backup_directory_sync_unsupported_platform_succeeds_gracefully(tmp_path
     def unsupported_sync(path):
         return False
 
-    with patch("objectdb.database._sync_directory", side_effect=unsupported_sync):
+    with patch("embeddeddb.database._sync_directory", side_effect=unsupported_sync):
         res = db.backup(backup_path)
         assert res == backup_path
 
     # Verify backup is valid and intact
-    b = ObjectDB(backup_path)
+    b = EmbeddedDB(backup_path)
     b.open()
     try:
         assert b.check_integrity()["valid"] is True
@@ -527,7 +527,7 @@ def test_backup_parent_dir_fsync_failure_with_restoration_failure_preserves_old_
     db_path = tmp_path / "double_sync_fail_src"
     backup_path = tmp_path / "double_sync_dst"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"critical_old_backup")
     db.backup(backup_path)
@@ -551,7 +551,7 @@ def test_backup_parent_dir_fsync_failure_with_restoration_failure_preserves_old_
             raise restore_rename_err
         return original_rename(self, target)
 
-    with patch("objectdb.database._sync_directory", side_effect=failing_sync):
+    with patch("embeddeddb.database._sync_directory", side_effect=failing_sync):
         with patch.object(Path, "rename", side_effect=failing_rename, autospec=True):
             with pytest.raises(OSError, match="I/O error during parent directory sync") as exc_info:
                 db.backup(backup_path)
@@ -564,7 +564,7 @@ def test_backup_parent_dir_fsync_failure_with_restoration_failure_preserves_old_
     assert len(old_backups) == 1
     preserved_backup = old_backups[0]
 
-    b_preserved = ObjectDB(preserved_backup)
+    b_preserved = EmbeddedDB(preserved_backup)
     b_preserved.open()
     try:
         assert b_preserved.check_integrity()["valid"] is True
@@ -589,13 +589,13 @@ def test_backup_restoration_directory_sync_failure_reported_and_preserves_backup
     db_path = tmp_path / "restore_sync_fail_src"
     backup_path = tmp_path / "restore_sync_fail_dst"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"initial_valid_backup_data")
     db.backup(backup_path)
 
     # Verify initial backup is functional
-    b1 = ObjectDB(backup_path)
+    b1 = EmbeddedDB(backup_path)
     b1.open()
     assert b1.get(1) == b"initial_valid_backup_data"
     b1.close()
@@ -630,7 +630,7 @@ def test_backup_restoration_directory_sync_failure_reported_and_preserves_backup
         return original_sync(path)
 
     with patch.object(Path, "rename", side_effect=failing_rename, autospec=True):
-        with patch("objectdb.database._sync_directory", side_effect=failing_sync):
+        with patch("embeddeddb.database._sync_directory", side_effect=failing_sync):
             with pytest.raises(OSError, match="Injected staging rename failure") as exc_info:
                 db.backup(backup_path)
 
@@ -640,7 +640,7 @@ def test_backup_restoration_directory_sync_failure_reported_and_preserves_backup
 
     # Verify the previous backup's contents remain recoverable at backup_path
     assert backup_path.exists(), "Previous backup should be preserved at backup_path"
-    b_recovered = ObjectDB(backup_path)
+    b_recovered = EmbeddedDB(backup_path)
     b_recovered.open()
     try:
         assert b_recovered.check_integrity()["valid"] is True

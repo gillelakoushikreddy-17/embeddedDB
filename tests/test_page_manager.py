@@ -1,7 +1,7 @@
 
-from objectdb.page_manager import PageManager, PAGE_SIZE
+from embeddeddb.page_manager import PageManager, PAGE_SIZE
 import pytest
-from objectdb.header import create_header
+from embeddeddb.header import create_header
 
 def test_write_and_read_page(tmp_path):
     database_file = tmp_path / "test.db"
@@ -129,7 +129,7 @@ def test_open_rejects_file_with_partial_page(tmp_path):
         manager.close()
 
 
-from objectdb.header import read_header
+from embeddeddb.header import read_header
 
 
 def test_update_root_page_id(tmp_path):

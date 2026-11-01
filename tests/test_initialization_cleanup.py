@@ -1,17 +1,17 @@
 from unittest.mock import patch
 import pytest
-from objectdb import ObjectDB
-from objectdb.database import _ACTIVE_INSTANCES
-from objectdb.page_manager import PageManager
-from objectdb.wal import WriteAheadLog
-from objectdb.segment import Segment
-from objectdb.recovery import RecoveryManager
+from embeddeddb import EmbeddedDB
+from embeddeddb.database import _ACTIVE_INSTANCES
+from embeddeddb.page_manager import PageManager
+from embeddeddb.wal import WriteAheadLog
+from embeddeddb.segment import Segment
+from embeddeddb.recovery import RecoveryManager
 
 
 def test_failure_in_page_manager_initialize_cleans_up_lock_and_registry(tmp_path):
     """If PageManager.initialize fails, lock and registry are released."""
     db_path = tmp_path / "init_fail_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
 
     canonical_path = str(db_path.resolve())
 
@@ -25,7 +25,7 @@ def test_failure_in_page_manager_initialize_cleans_up_lock_and_registry(tmp_path
     assert db.is_open is False
 
     # A subsequent open attempt succeeds
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     db2.open()
     assert db2.is_open is True
     db2.close()
@@ -34,7 +34,7 @@ def test_failure_in_page_manager_initialize_cleans_up_lock_and_registry(tmp_path
 def test_failure_in_page_manager_open_cleans_up_lock_and_registry(tmp_path):
     """If PageManager.open fails, lock and registry are released."""
     db_path = tmp_path / "pm_open_fail_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     canonical_path = str(db_path.resolve())
 
     with patch.object(PageManager, "open", side_effect=ValueError("Corrupt header")):
@@ -46,7 +46,7 @@ def test_failure_in_page_manager_open_cleans_up_lock_and_registry(tmp_path):
     assert db.is_open is False
 
     # A new instance can open after resolution
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     db2.open()
     db2.close()
 
@@ -54,7 +54,7 @@ def test_failure_in_page_manager_open_cleans_up_lock_and_registry(tmp_path):
 def test_failure_in_wal_open_cleans_up_manager_and_lock(tmp_path):
     """If WriteAheadLog.open fails, manager and lock are closed and registry cleared."""
     db_path = tmp_path / "wal_open_fail_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     canonical_path = str(db_path.resolve())
 
     with patch.object(WriteAheadLog, "open", side_effect=ValueError("Corrupt WAL")):
@@ -66,7 +66,7 @@ def test_failure_in_wal_open_cleans_up_manager_and_lock(tmp_path):
     assert db.is_open is False
 
     # A new instance can open after resolution
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     db2.open()
     db2.close()
 
@@ -74,7 +74,7 @@ def test_failure_in_wal_open_cleans_up_manager_and_lock(tmp_path):
 def test_failure_in_recovery_cleans_up_all_resources(tmp_path):
     """If RecoveryManager.recover fails, manager, wal, and lock are closed."""
     db_path = tmp_path / "recovery_fail_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     canonical_path = str(db_path.resolve())
 
     with patch.object(RecoveryManager, "recover", side_effect=RuntimeError("Recovery crash")):
@@ -85,7 +85,7 @@ def test_failure_in_recovery_cleans_up_all_resources(tmp_path):
     assert db._lock_fp is None
     assert db.is_open is False
 
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     db2.open()
     db2.close()
 
@@ -93,7 +93,7 @@ def test_failure_in_recovery_cleans_up_all_resources(tmp_path):
 def test_failure_in_segment_open_cleans_up_all_resources(tmp_path):
     """If Segment.open fails, manager, wal, and lock are closed."""
     db_path = tmp_path / "seg_fail_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     canonical_path = str(db_path.resolve())
 
     with patch.object(Segment, "open", side_effect=OSError("Segment file access error")):
@@ -104,7 +104,7 @@ def test_failure_in_segment_open_cleans_up_all_resources(tmp_path):
     assert db._lock_fp is None
     assert db.is_open is False
 
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     db2.open()
     db2.close()
 
@@ -112,7 +112,7 @@ def test_failure_in_segment_open_cleans_up_all_resources(tmp_path):
 def test_partially_initialized_instance_cannot_be_used(tmp_path):
     """Operations on an instance whose open() failed are rejected with RuntimeError."""
     db_path = tmp_path / "partial_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
 
     with patch.object(Segment, "open", side_effect=OSError("Failed open")):
         with pytest.raises(OSError):
@@ -135,7 +135,7 @@ def test_partially_initialized_instance_cannot_be_used(tmp_path):
 def test_cleanup_exception_does_not_mask_original_exception(tmp_path):
     """If a cleanup step (e.g. manager.close) raises during error handling, original error is preserved."""
     db_path = tmp_path / "mask_test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
 
     with patch.object(PageManager, "close", side_effect=OSError("Cleanup close error")):
         with patch.object(WriteAheadLog, "open", side_effect=ValueError("Original initialization error")):
@@ -148,7 +148,7 @@ def test_cleanup_exception_does_not_mask_original_exception(tmp_path):
 def test_repeated_close_is_idempotent(tmp_path):
     """Repeated calls to close() behave consistently and safely."""
     db_path = tmp_path / "idempotent_close_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"one")
     db.close()

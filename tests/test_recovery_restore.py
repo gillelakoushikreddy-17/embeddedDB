@@ -1,6 +1,6 @@
 import base64
 
-from objectdb.recovery import RecoveryManager
+from embeddeddb.recovery import RecoveryManager
 
 
 class FakeWAL:

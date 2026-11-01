@@ -1,7 +1,7 @@
 
-from objectdb.page_manager import PageManager
-from objectdb.persistent_btree import PersistentBTree
-from objectdb.btree import (
+from embeddeddb.page_manager import PageManager
+from embeddeddb.persistent_btree import PersistentBTree
+from embeddeddb.btree import (
     encode_internal_node,
     decode_internal_node,
 )

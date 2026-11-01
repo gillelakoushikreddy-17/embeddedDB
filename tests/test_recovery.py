@@ -1,4 +1,4 @@
-from objectdb.recovery import RecoveryManager
+from embeddeddb.recovery import RecoveryManager
 import pytest
 import base64
 

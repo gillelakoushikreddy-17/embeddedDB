@@ -1,7 +1,7 @@
 
 import base64
 
-from objectdb.page_manager import PAGE_SIZE
+from embeddeddb.page_manager import PAGE_SIZE
 
 
 class TransactionalPageWriter:
@@ -63,7 +63,7 @@ class TransactionalPageWriter:
         self.page_manager.file.seek(0, 2)
         file_size = self.page_manager.file.tell()
 
-        from objectdb.page_manager import PAGE_SIZE
+        from embeddeddb.page_manager import PAGE_SIZE
 
         if file_size % PAGE_SIZE != 0:
             raise ValueError("Database file contains an incomplete page")
@@ -129,7 +129,7 @@ class TransactionalPageWriter:
         ):
             raise ValueError("Root page ID must be a non-negative integer")
 
-        from objectdb.header import read_header
+        from embeddeddb.header import read_header
         page_zero = self.page_manager.read_page(0)
         header = read_header(page_zero)
         original_root_page_id = header["root_page_id"]
@@ -172,7 +172,7 @@ class TransactionalPageWriter:
         ):
             raise ValueError("Catalog page ID must be a non-negative integer")
 
-        from objectdb.header import read_header
+        from embeddeddb.header import read_header
         page_zero = self.page_manager.read_page(0)
         header = read_header(page_zero)
         original_catalog_page_id = header.get("catalog_page_id", 0)

@@ -1,4 +1,4 @@
-from objectdb.page_storage import (
+from embeddeddb.page_storage import (
     create_page,
     insert_record,
     read_record,
@@ -29,7 +29,7 @@ def test_multiple_records():
     record_count, _, _ = read_page_header(page)
     assert record_count == 2
 
-from objectdb.record import encode_record, decode_record
+from embeddeddb.record import encode_record, decode_record
 
 
 def test_store_metadata_record():

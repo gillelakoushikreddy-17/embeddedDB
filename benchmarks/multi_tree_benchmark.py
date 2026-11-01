@@ -1,5 +1,5 @@
 """
-Reproducible Multi-Tree Scalability Benchmark for ObjectDB.
+Reproducible Multi-Tree Scalability Benchmark for EmbeddedDB.
 
 Measures:
 - Database initialization time.
@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from objectdb import ObjectDB
+from embeddeddb import EmbeddedDB
 
 
 def get_rss_bytes() -> int:
@@ -95,7 +95,7 @@ def run_benchmark_stage(
     try:
         # 1. Database Initialization
         t0 = time.perf_counter()
-        db = ObjectDB(db_path)
+        db = EmbeddedDB(db_path)
         db.open()
         t1 = time.perf_counter()
         results["init_time_s"] = t1 - t0
@@ -165,7 +165,7 @@ def run_benchmark_stage(
 
         # 6. Database Reopening Time (Cold Catalog Load)
         t0 = time.perf_counter()
-        db = ObjectDB(db_path)
+        db = EmbeddedDB(db_path)
         db.open()
         t1 = time.perf_counter()
         results["reopen_time_s"] = t1 - t0
@@ -236,7 +236,7 @@ def run_benchmark_stage(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ObjectDB Multi-Tree Benchmark")
+    parser = argparse.ArgumentParser(description="EmbeddedDB Multi-Tree Benchmark")
     parser.add_argument(
         "--stages",
         nargs="+",
@@ -259,7 +259,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 70)
-    print("ObjectDB Multi-Tree Scalability Benchmark")
+    print("EmbeddedDB Multi-Tree Scalability Benchmark")
     print(f"Platform: {platform.system()} {platform.machine()} | Python {platform.python_version()}")
     print("=" * 70)
 

@@ -1,5 +1,5 @@
 """
-Comprehensive test suite for Multi-Tree Persistent B+ Tree support in ObjectDB.
+Comprehensive test suite for Multi-Tree Persistent B+ Tree support in EmbeddedDB.
 Tests cover:
 A. Tree creation (single, multiple, many scaling trees, duplicate and invalid names)
 B. Tree isolation (identical keys, independent updates and deletions)
@@ -13,7 +13,7 @@ G. Regression and backward compatibility (single-tree API alongside named trees,
 import pytest
 from pathlib import Path
 
-from objectdb import ObjectDB, Tree, TreeAlreadyExistsError, TreeNotFoundError
+from embeddeddb import EmbeddedDB, Tree, TreeAlreadyExistsError, TreeNotFoundError
 
 
 # =====================================================================
@@ -21,7 +21,7 @@ from objectdb import ObjectDB, Tree, TreeAlreadyExistsError, TreeNotFoundError
 # =====================================================================
 
 def test_tree_creation_single_and_three(tmp_path):
-    with ObjectDB(tmp_path / "db") as db:
+    with EmbeddedDB(tmp_path / "db") as db:
         assert db.list_trees() == []
 
         users = db.create_tree("users")
@@ -39,7 +39,7 @@ def test_tree_creation_single_and_three(tmp_path):
 
 
 def test_tree_creation_duplicate_name_rejected(tmp_path):
-    with ObjectDB(tmp_path / "db") as db:
+    with EmbeddedDB(tmp_path / "db") as db:
         db.create_tree("users")
 
         with pytest.raises(TreeAlreadyExistsError, match="already exists"):
@@ -51,7 +51,7 @@ def test_tree_creation_duplicate_name_rejected(tmp_path):
 
 
 def test_tree_creation_invalid_names_rejected(tmp_path):
-    with ObjectDB(tmp_path / "db") as db:
+    with EmbeddedDB(tmp_path / "db") as db:
         # Empty string
         with pytest.raises(ValueError, match="empty"):
             db.create_tree("")
@@ -76,7 +76,7 @@ def test_tree_creation_invalid_names_rejected(tmp_path):
 
 
 def test_open_nonexistent_tree_rejected(tmp_path):
-    with ObjectDB(tmp_path / "db") as db:
+    with EmbeddedDB(tmp_path / "db") as db:
         with pytest.raises(TreeNotFoundError, match="does not exist"):
             db.open_tree("nonexistent")
 
@@ -93,7 +93,7 @@ def test_tree_creation_many_trees_scaling(tmp_path):
     db_path = tmp_path / "db"
     tree_count = 200
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         for i in range(tree_count):
             name = f"tenant_tree_{i:04d}"
             t = db.create_tree(name)
@@ -109,7 +109,7 @@ def test_tree_creation_many_trees_scaling(tmp_path):
         assert report["valid"] is True
 
     # Reopen and verify all 200 trees exist and can read their values
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         assert len(db.list_trees()) == tree_count
         for i in range(tree_count):
             name = f"tenant_tree_{i:04d}"
@@ -126,7 +126,7 @@ def test_tree_creation_many_trees_scaling(tmp_path):
 
 def test_tree_key_value_isolation(tmp_path):
     """Verify that multiple trees have completely independent key spaces."""
-    with ObjectDB(tmp_path / "db") as db:
+    with EmbeddedDB(tmp_path / "db") as db:
         users = db.create_tree("users")
         buckets = db.create_tree("buckets")
         objects = db.create_tree("objects")
@@ -160,7 +160,7 @@ def test_tree_key_value_isolation(tmp_path):
 def test_tree_persistence_across_reopen(tmp_path):
     db_path = tmp_path / "db"
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         users = db.create_tree("users")
         buckets = db.create_tree("buckets")
 
@@ -170,7 +170,7 @@ def test_tree_persistence_across_reopen(tmp_path):
         buckets.put(20, b"bucket_20")
 
     # Reopen
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         assert sorted(db.list_trees()) == ["buckets", "users"]
 
         users = db.open_tree("users")
@@ -197,7 +197,7 @@ def test_multi_tree_leaf_and_internal_splits(tmp_path):
     db_path = tmp_path / "db"
     key_count = 150  # Enough to trigger multiple splits in each tree
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         tree_a = db.create_tree("tree_a")
         tree_b = db.create_tree("tree_b")
 
@@ -222,7 +222,7 @@ def test_multi_tree_leaf_and_internal_splits(tmp_path):
         assert report["valid"] is True
 
     # Reopen and verify after split persistence
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         tree_a = db.open_tree("tree_a")
         tree_b = db.open_tree("tree_b")
 
@@ -235,7 +235,7 @@ def test_multi_tree_leaf_and_internal_splits(tmp_path):
 
 
 def test_multi_tree_missing_key_and_deletions(tmp_path):
-    with ObjectDB(tmp_path / "db") as db:
+    with EmbeddedDB(tmp_path / "db") as db:
         t = db.create_tree("test_tree")
 
         # Missing key returns None
@@ -257,7 +257,7 @@ def test_multi_tree_missing_key_and_deletions(tmp_path):
 # =====================================================================
 
 def test_shared_page_management(tmp_path):
-    with ObjectDB(tmp_path / "db") as db:
+    with EmbeddedDB(tmp_path / "db") as db:
         t1 = db.create_tree("t1")
         t2 = db.create_tree("t2")
         t3 = db.create_tree("t3")
@@ -284,7 +284,7 @@ def test_shared_page_management(tmp_path):
 def test_multi_tree_explicit_transaction_commit(tmp_path):
     db_path = tmp_path / "db"
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         u = db.create_tree("users")
         b = db.create_tree("buckets")
 
@@ -293,7 +293,7 @@ def test_multi_tree_explicit_transaction_commit(tmp_path):
             b.put(10, b"alice-bucket")
 
     # Reopen and check
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         u = db.open_tree("users")
         b = db.open_tree("buckets")
         assert u.get(1) == b"alice"
@@ -303,7 +303,7 @@ def test_multi_tree_explicit_transaction_commit(tmp_path):
 def test_multi_tree_explicit_transaction_rollback(tmp_path):
     db_path = tmp_path / "db"
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         u = db.create_tree("users")
         b = db.create_tree("buckets")
 
@@ -325,7 +325,7 @@ def test_multi_tree_explicit_transaction_rollback(tmp_path):
         assert b.get(20) is None
 
     # Persistent check after reopen
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         u = db.open_tree("users")
         b = db.open_tree("buckets")
         assert u.get(1) == b"committed_alice"
@@ -340,7 +340,7 @@ def test_interrupted_tree_creation_rollback(tmp_path):
     """
     db_path = tmp_path / "db"
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         db.create_tree("stable_tree")
         initial_trees = db.list_trees()
 
@@ -362,7 +362,7 @@ def test_interrupted_tree_creation_rollback(tmp_path):
         assert report["valid"] is True
 
     # Reopen and verify
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         assert db.list_trees() == ["stable_tree"]
         with pytest.raises(TreeNotFoundError):
             db.open_tree("aborted_tree")
@@ -372,7 +372,7 @@ def test_multi_tree_crash_recovery(tmp_path):
     """Test simulated ungraceful crash with uncommitted multi-tree writes."""
     db_path = tmp_path / "db"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     u = db.create_tree("users")
     u.put(1, b"committed_user")
@@ -386,7 +386,7 @@ def test_multi_tree_crash_recovery(tmp_path):
     db.simulate_crash()
 
     # Reopen should trigger startup recovery and undo uncommitted user 2
-    recovered_db = ObjectDB(db_path)
+    recovered_db = EmbeddedDB(db_path)
     recovered_db.open()
     try:
         u = recovered_db.open_tree("users")
@@ -402,7 +402,7 @@ def test_interrupted_tree_creation_crash_recovery(tmp_path):
     """Test crash recovery when process crashes while creating a tree in a transaction."""
     db_path = tmp_path / "db"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.create_tree("permanent_tree")
 
@@ -414,7 +414,7 @@ def test_interrupted_tree_creation_crash_recovery(tmp_path):
     db.simulate_crash()
 
     # Reopen: crash_tree must not exist
-    recovered_db = ObjectDB(db_path)
+    recovered_db = EmbeddedDB(db_path)
     recovered_db.open()
     try:
         assert recovered_db.list_trees() == ["permanent_tree"]
@@ -430,7 +430,7 @@ def test_interrupted_tree_split_crash_recovery(tmp_path):
     """Test crash recovery when a tree root split is interrupted by a crash."""
     db_path = tmp_path / "db"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     t = db.create_tree("split_tree")
     # Insert enough keys to be close to splitting
@@ -451,7 +451,7 @@ def test_interrupted_tree_split_crash_recovery(tmp_path):
     db.simulate_crash()
 
     # Reopen: should recover to orig_root and keep only committed keys
-    recovered_db = ObjectDB(db_path)
+    recovered_db = EmbeddedDB(db_path)
     recovered_db.open()
     try:
         t_recovered = recovered_db.open_tree("split_tree")
@@ -472,12 +472,12 @@ def test_interrupted_tree_split_crash_recovery(tmp_path):
 
 def test_backward_compatibility_single_tree_alongside_named_trees(tmp_path):
     """
-    Verify that the original single-tree ObjectDB API (db.put, db.get, db.delete)
+    Verify that the original single-tree EmbeddedDB API (db.put, db.get, db.delete)
     continues to operate normally alongside new named trees.
     """
     db_path = tmp_path / "db"
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         # Single-tree API
         db.put(1, b"legacy_root_1")
         db.put(2, b"legacy_root_2")
@@ -500,7 +500,7 @@ def test_backward_compatibility_single_tree_alongside_named_trees(tmp_path):
         assert report["valid"] is True
 
     # Reopen and check
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         assert db.get(1) is None
         assert db.get(2) == b"legacy_root_2"
         users = db.open_tree("users")
@@ -512,7 +512,7 @@ def test_multi_tree_backup_and_integrity(tmp_path):
     db_path = tmp_path / "db"
     backup_path = tmp_path / "backup"
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         u = db.create_tree("users")
         b = db.create_tree("buckets")
 
@@ -524,7 +524,7 @@ def test_multi_tree_backup_and_integrity(tmp_path):
         db.backup(backup_path)
 
     # Open backup and verify all trees and records
-    with ObjectDB(backup_path) as backup_db:
+    with EmbeddedDB(backup_path) as backup_db:
         assert sorted(backup_db.list_trees()) == ["buckets", "users"]
         u = backup_db.open_tree("users")
         b = backup_db.open_tree("buckets")
@@ -538,7 +538,7 @@ def test_multi_tree_backup_and_integrity(tmp_path):
 
 
 def test_drop_tree(tmp_path):
-    with ObjectDB(tmp_path / "db") as db:
+    with EmbeddedDB(tmp_path / "db") as db:
         t = db.create_tree("temp_tree")
         t.put(1, b"value")
 

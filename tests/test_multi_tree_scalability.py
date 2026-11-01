@@ -1,5 +1,5 @@
 """
-Scalability and Boundary Tests for Multi-Tree Persistent B+ Trees in ObjectDB.
+Scalability and Boundary Tests for Multi-Tree Persistent B+ Trees in EmbeddedDB.
 
 Tests cover:
 1. Large-scale tree creation (1,000 trees across numerous catalog pages).
@@ -16,7 +16,7 @@ import pytest
 import random
 from pathlib import Path
 
-from objectdb import ObjectDB, TreeNotFoundError, TreeAlreadyExistsError
+from embeddeddb import EmbeddedDB, TreeNotFoundError, TreeAlreadyExistsError
 
 
 def test_scale_1000_trees_persistence_and_isolation(tmp_path):
@@ -28,7 +28,7 @@ def test_scale_1000_trees_persistence_and_isolation(tmp_path):
     num_trees = 1000
 
     # 1. Create 1000 trees in batches
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         batch_size = 200
         for b in range(0, num_trees, batch_size):
             with db.transaction():
@@ -42,7 +42,7 @@ def test_scale_1000_trees_persistence_and_isolation(tmp_path):
         assert len(catalog_pages) >= 5  # ~170 entries/page -> at least 5-6 pages
 
     # 2. Reopen and verify isolation and persistence
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         assert len(db.list_trees()) == num_trees
 
         # Sample 50 random trees and check contents
@@ -65,7 +65,7 @@ def test_bulk_tree_creation_rollback(tmp_path):
     """
     db_path = tmp_path / "bulk_rollback.db"
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         # Establish initial trees
         with db.transaction():
             db.create_tree("tree_init_1").put(1, b"v1")
@@ -95,7 +95,7 @@ def test_bulk_tree_creation_rollback(tmp_path):
         assert t1.get(1) == b"v1"
 
     # Verify after restart
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         assert db.list_trees() == ["tree_init_1", "tree_init_2"]
         integ = db.check_integrity(raise_on_error=True)
         assert integ["valid"] is True
@@ -110,7 +110,7 @@ def test_interleaved_deletion_and_recreation_at_scale(tmp_path):
     db_path = tmp_path / "interleaved_delete.db"
     total_trees = 400
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         with db.transaction():
             for i in range(total_trees):
                 t = db.create_tree(f"stream_{i:04d}")
@@ -145,7 +145,7 @@ def test_interleaved_deletion_and_recreation_at_scale(tmp_path):
             assert t.get(1) == b"recreated_data"
 
     # Reopen and check persistence
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         assert db.open_tree("stream_0000").get(1) == b"original_0"
         assert db.open_tree("stream_0001").get(1) == b"recreated_data"
         with pytest.raises(TreeNotFoundError):
@@ -162,7 +162,7 @@ def test_multi_tree_transaction_atomic_commit(tmp_path):
     db_path = tmp_path / "multi_tree_tx.db"
     num_trees = 50
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         for i in range(num_trees):
             db.create_tree(f"account_{i:03d}")
 
@@ -177,7 +177,7 @@ def test_multi_tree_transaction_atomic_commit(tmp_path):
             assert t.get(100) == f"balance_{i * 10}".encode("utf-8")
 
     # Reopen and check
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         for i in range(num_trees):
             t = db.open_tree(f"account_{i:03d}")
             assert t.get(100) == f"balance_{i * 10}".encode("utf-8")

@@ -1,15 +1,15 @@
-from objectdb.database import ObjectDB
-from objectdb.page_manager import PAGE_SIZE, PageManager
-from objectdb.wal import WriteAheadLog
-from objectdb.transaction import Transaction
-from objectdb.transactional_page_writer import TransactionalPageWriter
+from embeddeddb.database import EmbeddedDB
+from embeddeddb.page_manager import PAGE_SIZE, PageManager
+from embeddeddb.wal import WriteAheadLog
+from embeddeddb.transaction import Transaction
+from embeddeddb.transactional_page_writer import TransactionalPageWriter
 
 
 def test_objectdb_open_recovers_incomplete_transaction(tmp_path):
     db_path = tmp_path / "my_database"
 
     # 1. Create and initialize the database normally.
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     manager = db.page_manager
@@ -34,8 +34,8 @@ def test_objectdb_open_recovers_incomplete_transaction(tmp_path):
     wal.close()
     db.is_open = False
 
-    # 5. Open a fresh ObjectDB instance.
-    recovered_db = ObjectDB(db_path)
+    # 5. Open a fresh EmbeddedDB instance.
+    recovered_db = EmbeddedDB(db_path)
     recovered_db.open()
 
     # 6. Verify startup recovery restored the original contents.

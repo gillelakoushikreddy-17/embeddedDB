@@ -1,9 +1,9 @@
 
 from pathlib import Path
 
-from objectdb.segment import Segment
-from objectdb.record import encode_record, decode_record
-from objectdb.persistent_btree import PersistentBTree
+from embeddeddb.segment import Segment
+from embeddeddb.record import encode_record, decode_record
+from embeddeddb.persistent_btree import PersistentBTree
 
 
 class Storage:

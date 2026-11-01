@@ -3,9 +3,9 @@ import base64
 
 import pytest
 
-from objectdb.page_manager import PageManager, PAGE_SIZE
-from objectdb.wal import WriteAheadLog
-from objectdb.transactional_page_writer import TransactionalPageWriter
+from embeddeddb.page_manager import PageManager, PAGE_SIZE
+from embeddeddb.wal import WriteAheadLog
+from embeddeddb.transactional_page_writer import TransactionalPageWriter
 
 
 def setup_database(tmp_path):
@@ -104,9 +104,9 @@ def test_header_page_cannot_be_written(tmp_path):
 def test_allocate_page_records_allocation_in_wal(
     tmp_path,
 ):
-    from objectdb.page_manager import PageManager
-    from objectdb.wal import WriteAheadLog
-    from objectdb.transactional_page_writer import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.wal import WriteAheadLog
+    from embeddeddb.transactional_page_writer import (
         TransactionalPageWriter,
     )
 
@@ -144,9 +144,9 @@ def test_allocate_page_records_allocation_in_wal(
         manager.close()
 
 def test_allocate_page_records_allocation_in_wal(tmp_path):
-    from objectdb.page_manager import PageManager
-    from objectdb.wal import WriteAheadLog
-    from objectdb.transactional_page_writer import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.wal import WriteAheadLog
+    from embeddeddb.transactional_page_writer import (
         TransactionalPageWriter,
     )
 
@@ -184,9 +184,9 @@ def test_allocate_page_rejects_invalid_transaction_id(
     tmp_path,
     transaction_id,
 ):
-    from objectdb.page_manager import PageManager
-    from objectdb.wal import WriteAheadLog
-    from objectdb.transactional_page_writer import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.wal import WriteAheadLog
+    from embeddeddb.transactional_page_writer import (
         TransactionalPageWriter,
     )
 
@@ -218,7 +218,7 @@ def test_update_root_page_id_logs_before_image(tmp_path):
         writer.update_root_page_id(1, 5)
 
         # Header on disk should now be 5
-        from objectdb.header import read_header
+        from embeddeddb.header import read_header
         assert read_header(manager.read_page(0))["root_page_id"] == 5
 
         # WAL should contain ROOT_PAGE_BEFORE_IMAGE

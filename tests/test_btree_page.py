@@ -1,10 +1,10 @@
 import pytest
-from objectdb.btree import (
+from embeddeddb.btree import (
     encode_internal_node,
     decode_internal_node,
     PAGE_SIZE,
 )
-from objectdb.page_manager import PageManager
+from embeddeddb.page_manager import PageManager
 
 
 def test_internal_node_round_trip():

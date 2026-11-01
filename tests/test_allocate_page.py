@@ -1,4 +1,4 @@
-from objectdb.page_manager import PageManager
+from embeddeddb.page_manager import PageManager
 
 
 def test_allocate_page(tmp_path):

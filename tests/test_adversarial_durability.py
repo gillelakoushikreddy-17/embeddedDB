@@ -1,7 +1,7 @@
 import random
 import pytest
-from objectdb import ObjectDB
-from objectdb.database import MIN_KEY, MAX_KEY
+from embeddeddb import EmbeddedDB
+from embeddeddb.database import MIN_KEY, MAX_KEY
 
 
 def test_64bit_integer_key_boundaries_and_rejection(tmp_path):
@@ -11,7 +11,7 @@ def test_64bit_integer_key_boundaries_and_rejection(tmp_path):
     and strict rejection of overflow and invalid types.
     """
     db_path = tmp_path / "key_boundaries_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:
@@ -57,7 +57,7 @@ def test_64bit_integer_key_boundaries_and_rejection(tmp_path):
 
         # Persistence check
         db.close()
-        db = ObjectDB(db_path)
+        db = EmbeddedDB(db_path)
         db.open()
 
         for k in boundary_keys:
@@ -77,11 +77,11 @@ def test_64bit_integer_key_boundaries_and_rejection(tmp_path):
 
 def test_randomized_differential_testing_against_dict(tmp_path):
     """
-    Stress-test ObjectDB against a reference Python dict model
+    Stress-test EmbeddedDB against a reference Python dict model
     with randomized put, get, delete, commit, and rollback operations.
     """
     db_path = tmp_path / "differential_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     reference_model = {}
@@ -171,7 +171,7 @@ def test_interrupted_tree_splits_and_crash_recovery(tmp_path):
     to handle future insertions, splits, and deletions.
     """
     db_path = tmp_path / "split_crash_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:
@@ -183,7 +183,7 @@ def test_interrupted_tree_splits_and_crash_recovery(tmp_path):
         db.close()
 
         # Reopen and start multi-key transaction that causes internal splits
-        db = ObjectDB(db_path)
+        db = EmbeddedDB(db_path)
         db.open()
 
         try:
@@ -198,7 +198,7 @@ def test_interrupted_tree_splits_and_crash_recovery(tmp_path):
             pass
 
         # Database must recover cleanly on reopen
-        db = ObjectDB(db_path)
+        db = EmbeddedDB(db_path)
         db.open()
 
         # Check integrity
@@ -229,18 +229,18 @@ def test_concurrent_open_conflict_raises_error(tmp_path):
     already holds the lock in the same process raises RuntimeError.
     """
     db_path = tmp_path / "lock_conflict_db"
-    db1 = ObjectDB(db_path)
+    db1 = EmbeddedDB(db_path)
     db1.open()
 
     try:
-        db2 = ObjectDB(db_path)
+        db2 = EmbeddedDB(db_path)
         with pytest.raises(RuntimeError, match="already open"):
             db2.open()
     finally:
         db1.close()
 
     # After close, db2 can open
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     db2.open()
     db2.close()
 
@@ -248,18 +248,18 @@ def test_concurrent_open_conflict_raises_error(tmp_path):
 def test_corrupted_mid_wal_record_prevents_database_open(tmp_path):
     """
     If a WAL record in the middle of the log is corrupted (e.g., bit flipped or invalid JSON),
-    ObjectDB must fail closed on open() rather than silently skipping records or entering
+    EmbeddedDB must fail closed on open() rather than silently skipping records or entering
     undefined state.
     """
     db_path = tmp_path / "corrupt_wal_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"val1")
     db.put(2, b"val2")
     db.put(3, b"val3")
     db.close()
 
-    wal_path = db_path / "objectdb.wal"
+    wal_path = db_path / "embeddeddb.wal"
     with open(wal_path, "r+b") as f:
         lines = f.readlines()
         assert len(lines) >= 3
@@ -273,7 +273,7 @@ def test_corrupted_mid_wal_record_prevents_database_open(tmp_path):
         f.flush()
 
     # Reopening MUST raise ValueError and refuse to open
-    reopened = ObjectDB(db_path)
+    reopened = EmbeddedDB(db_path)
     with pytest.raises(ValueError, match="WAL contains an invalid record"):
         reopened.open()
 

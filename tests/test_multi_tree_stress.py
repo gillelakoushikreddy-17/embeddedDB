@@ -1,5 +1,5 @@
 """
-Multi-Tree Randomized Differential Stress Test for ObjectDB.
+Multi-Tree Randomized Differential Stress Test for EmbeddedDB.
 
 Maintains a Python dictionary reference model `dict[str, dict[int, bytes]]`
 and performs hundreds of randomized operations:
@@ -17,12 +17,12 @@ import random
 import pytest
 from pathlib import Path
 
-from objectdb import ObjectDB, TreeNotFoundError, TreeAlreadyExistsError
+from embeddeddb import EmbeddedDB, TreeNotFoundError, TreeAlreadyExistsError
 
 
 def test_multi_tree_randomized_differential_stress(tmp_path):
     """
-    Randomized stress test comparing ObjectDB multi-tree operations
+    Randomized stress test comparing EmbeddedDB multi-tree operations
     against an in-memory reference model across 500 operations.
     """
     seed = 1337
@@ -32,7 +32,7 @@ def test_multi_tree_randomized_differential_stress(tmp_path):
     # Reference model: tree_name -> dict of key -> value
     ref_trees: dict[str, dict[int, bytes]] = {}
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     total_ops = 500
@@ -86,7 +86,7 @@ def test_multi_tree_randomized_differential_stress(tmp_path):
 
             elif action == "reopen_db":
                 db.close()
-                db = ObjectDB(db_path)
+                db = EmbeddedDB(db_path)
                 db.open()
                 # Verify catalog loaded matches reference model tree count
                 assert sorted(db.list_trees()) == sorted(ref_trees.keys())
@@ -134,7 +134,7 @@ def test_multi_tree_randomized_differential_stress(tmp_path):
 
         # Reopen and re-verify everything
         db.close()
-        db = ObjectDB(db_path)
+        db = EmbeddedDB(db_path)
         db.open()
         assert sorted(db.list_trees()) == sorted(ref_trees.keys())
         for name, contents in ref_trees.items():

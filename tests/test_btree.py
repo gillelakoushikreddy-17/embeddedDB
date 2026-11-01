@@ -1,5 +1,5 @@
 
-from objectdb.btree import BTree
+from embeddeddb.btree import BTree
 
 
 def test_insert_and_search_100_keys():

@@ -1,10 +1,10 @@
 
 import pytest
 
-from objectdb.page_manager import PageManager, PAGE_SIZE
-from objectdb.wal import WriteAheadLog
-from objectdb.transaction import Transaction, TransactionState
-from objectdb.transactional_page_writer import TransactionalPageWriter
+from embeddeddb.page_manager import PageManager, PAGE_SIZE
+from embeddeddb.wal import WriteAheadLog
+from embeddeddb.transaction import Transaction, TransactionState
+from embeddeddb.transactional_page_writer import TransactionalPageWriter
 
 
 def setup_transaction(tmp_path, name="transaction"):
@@ -193,7 +193,7 @@ def test_transaction_allocate_and_read_page(tmp_path):
 def test_transaction_rollback_restores_root_page_id(tmp_path):
     manager, wal, _, tx, _ = setup_transaction(tmp_path, "root_rb")
     try:
-        from objectdb.header import read_header
+        from embeddeddb.header import read_header
         manager.update_root_page_id(1)
 
         # Update root in transaction

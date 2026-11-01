@@ -1,5 +1,5 @@
 import struct
-from objectdb.record import encode_record, decode_record
+from embeddeddb.record import encode_record, decode_record
 
 PAGE_SIZE = 4096
 

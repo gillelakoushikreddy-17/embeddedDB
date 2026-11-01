@@ -1,12 +1,12 @@
 import tempfile
 from pathlib import Path
 
-from objectdb.database import ObjectDB
+from embeddeddb.database import EmbeddedDB
 
 with tempfile.TemporaryDirectory() as temp_dir:
     db_path = Path(temp_dir) / "my_database"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     db.put(10, b"Hello")

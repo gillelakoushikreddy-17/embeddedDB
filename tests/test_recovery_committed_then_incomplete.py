@@ -1,8 +1,8 @@
-from objectdb.page_manager import PageManager, PAGE_SIZE
-from objectdb.wal import WriteAheadLog
-from objectdb.transaction import Transaction
-from objectdb.transactional_page_writer import TransactionalPageWriter
-from objectdb.recovery import RecoveryManager
+from embeddeddb.page_manager import PageManager, PAGE_SIZE
+from embeddeddb.wal import WriteAheadLog
+from embeddeddb.transaction import Transaction
+from embeddeddb.transactional_page_writer import TransactionalPageWriter
+from embeddeddb.recovery import RecoveryManager
 
 
 def test_recovery_preserves_commit_and_undoes_later_transaction(tmp_path):

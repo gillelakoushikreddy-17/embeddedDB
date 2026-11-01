@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from objectdb.wal import WriteAheadLog
+from embeddeddb.wal import WriteAheadLog
 
 
 def test_append_and_read_records(tmp_path):

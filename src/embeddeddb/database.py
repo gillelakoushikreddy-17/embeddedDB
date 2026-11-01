@@ -9,27 +9,27 @@ import threading
 import uuid
 import weakref
 
-from objectdb.catalog import (
+from embeddeddb.catalog import (
     TreeCatalog,
     TreeAlreadyExistsError,
     TreeNotFoundError,
     validate_tree_name,
     decode_catalog_page,
 )
-from objectdb.header import NO_ROOT_PAGE, NO_CATALOG_PAGE, create_header, read_header
-from objectdb.page_manager import PAGE_SIZE, PageManager
-from objectdb.persistent_btree import PersistentBTree
-from objectdb.record import decode_record, encode_record
-from objectdb.recovery import RecoveryManager
-from objectdb.segment import Segment
-from objectdb.transaction import TransactionPageAdapter, TransactionState
-from objectdb.transactional_page_writer import TransactionalPageWriter
-from objectdb.tree import (
+from embeddeddb.header import NO_ROOT_PAGE, NO_CATALOG_PAGE, create_header, read_header
+from embeddeddb.page_manager import PAGE_SIZE, PageManager
+from embeddeddb.persistent_btree import PersistentBTree
+from embeddeddb.record import decode_record, encode_record
+from embeddeddb.recovery import RecoveryManager
+from embeddeddb.segment import Segment
+from embeddeddb.transaction import TransactionPageAdapter, TransactionState
+from embeddeddb.transactional_page_writer import TransactionalPageWriter
+from embeddeddb.tree import (
     Tree,
     NamedTreePageAdapter,
     NamedTreeTransactionPageAdapter,
 )
-from objectdb.wal import WriteAheadLog
+from embeddeddb.wal import WriteAheadLog
 
 MIN_KEY = -9223372036854775808
 MAX_KEY = 9223372036854775807
@@ -133,7 +133,7 @@ def _validate_key(key):
         )
 
 
-class ObjectDB:
+class EmbeddedDB:
     def __init__(self, path):
         self.path = Path(path)
         self.page_manager = None
@@ -197,8 +197,8 @@ class ObjectDB:
         registered = False
 
         try:
-            # 1. Acquire an exclusive advisory process lock on objectdb.lock.
-            lock_file = self.path / "objectdb.lock"
+            # 1. Acquire an exclusive advisory process lock on embeddeddb.lock.
+            lock_file = self.path / "embeddeddb.lock"
             lock_fp = open(lock_file, "a+b")
             try:
                 fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -212,9 +212,9 @@ class ObjectDB:
             registered = True
 
             # 2. Page Manager initialization
-            db_file = self.path / "objectdb.data"
+            db_file = self.path / "embeddeddb.data"
             segment_file = self.path / "segment-0.dat"
-            wal_file = self.path / "objectdb.wal"
+            wal_file = self.path / "embeddeddb.wal"
 
             if not db_file.exists():
                 init_manager = PageManager(db_file)
@@ -318,7 +318,7 @@ class ObjectDB:
             raise orig_exc
 
     def _begin_transaction(self):
-        from objectdb.transaction import Transaction
+        from embeddeddb.transaction import Transaction
 
         tx_id = self.next_transaction_id
         self.next_transaction_id += 1
@@ -434,7 +434,7 @@ class ObjectDB:
             if self.catalog.has_tree(name):
                 raise TreeAlreadyExistsError(f"Tree '{name}' already exists")
 
-            from objectdb.btree import encode_leaf_node
+            from embeddeddb.btree import encode_leaf_node
             empty_leaf = encode_leaf_node([], [])
 
             if self._active_transaction is not None:
@@ -600,7 +600,7 @@ class ObjectDB:
         total_keys = 0
         reachable_pages = set()
 
-        from objectdb.btree import (
+        from embeddeddb.btree import (
             INTERNAL_NODE_TYPE,
             LEAF_NODE_TYPE,
             decode_internal_node,
@@ -846,12 +846,12 @@ class ObjectDB:
                 self._copy_snapshot_files(target_path)
         else:
             # Backup of a closed database
-            db_file = self.path / "objectdb.data"
+            db_file = self.path / "embeddeddb.data"
             if not db_file.exists():
                 raise RuntimeError("Cannot back up a non-existent database")
 
             # Acquire advisory lock to ensure no other process is actively mutating files
-            lock_file = self.path / "objectdb.lock"
+            lock_file = self.path / "embeddeddb.lock"
             lock_fp = open(lock_file, "a+b")
             try:
                 try:
@@ -888,7 +888,7 @@ class ObjectDB:
         old_backup_dir = None
 
         try:
-            for filename in ("objectdb.data", "segment-0.dat", "objectdb.wal"):
+            for filename in ("embeddeddb.data", "segment-0.dat", "embeddeddb.wal"):
                 src_file = self.path / filename
                 if src_file.exists():
                     dst_file = staging_dir / filename
@@ -1046,7 +1046,7 @@ class ObjectDB:
 
 
 class _DatabaseTransactionContext:
-    """Context manager for explicit ObjectDB transactions."""
+    """Context manager for explicit EmbeddedDB transactions."""
 
     def __init__(self, db):
         self.db = db
@@ -1065,7 +1065,7 @@ class _DatabaseTransactionContext:
             if self.db._active_transaction is not None:
                 raise RuntimeError("Nested transactions are not supported")
 
-            from objectdb.transaction import TransactionPageAdapter
+            from embeddeddb.transaction import TransactionPageAdapter
 
             self.tx = self.db._begin_transaction()
             self.db._active_transaction = self.tx
@@ -1132,3 +1132,5 @@ class _DatabaseTransactionContext:
             if self._lock_acquired:
                 self.db._mutation_lock.release()
                 self._lock_acquired = False
+# Backward compatibility alias
+ObjectDB = EmbeddedDB

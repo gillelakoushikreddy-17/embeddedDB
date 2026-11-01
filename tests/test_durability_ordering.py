@@ -1,6 +1,6 @@
 import pytest
-from objectdb import ObjectDB
-from objectdb.transaction import TransactionState
+from embeddeddb import EmbeddedDB
+from embeddeddb.transaction import TransactionState
 
 
 def test_durability_ordering_segment_synced_before_commit(tmp_path):
@@ -8,7 +8,7 @@ def test_durability_ordering_segment_synced_before_commit(tmp_path):
     Verify that payload data is synced to the segment before metadata COMMIT record is written.
     """
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     order_of_operations = []
@@ -44,7 +44,7 @@ def test_explicit_transaction_segment_synced_before_commit(tmp_path):
     Verify that in explicit multi-operation transactions, segment sync precedes WAL COMMIT.
     """
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     order_of_operations = []
@@ -82,7 +82,7 @@ def test_failure_at_segment_sync_rolls_back_cleanly(tmp_path):
     without committing metadata or leaving poisoned state.
     """
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     def failing_sync():
@@ -110,7 +110,7 @@ def test_commit_io_failure_poisons_database_and_prevents_unsafe_rollback(tmp_pat
     The transaction must transition to FAILED, reject rollback(), and poison the db instance.
     """
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     # Pre-populate one item
@@ -139,7 +139,7 @@ def test_commit_io_failure_poisons_database_and_prevents_unsafe_rollback(tmp_pat
     db.close()
 
     # Reopening triggers startup recovery and brings the database to a clean consistent state
-    reopened_db = ObjectDB(db_path)
+    reopened_db = EmbeddedDB(db_path)
     reopened_db.open()
     try:
         assert reopened_db.get(1) == b"first"
@@ -153,7 +153,7 @@ def test_key_range_validation(tmp_path):
     Verify that 64-bit signed integer bounds [-2^63, 2^63 - 1] are enforced.
     """
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     min_key = -9223372036854775808

@@ -1,12 +1,12 @@
 import os
 from pathlib import Path
 import pytest
-from objectdb import ObjectDB
-from objectdb.page_manager import PageManager, PAGE_SIZE
-from objectdb.wal import WriteAheadLog
-from objectdb.transactional_page_writer import TransactionalPageWriter
-from objectdb.recovery import RecoveryManager
-from objectdb.transaction import Transaction
+from embeddeddb import EmbeddedDB
+from embeddeddb.page_manager import PageManager, PAGE_SIZE
+from embeddeddb.wal import WriteAheadLog
+from embeddeddb.transactional_page_writer import TransactionalPageWriter
+from embeddeddb.recovery import RecoveryManager
+from embeddeddb.transaction import Transaction
 
 
 def test_crash_after_page_allocation_reclaims_orphaned_pages_on_reopen(tmp_path):
@@ -15,7 +15,7 @@ def test_crash_after_page_allocation_reclaims_orphaned_pages_on_reopen(tmp_path)
     startup recovery physically reclaims the orphaned pages by truncating the file.
     """
     db_path = tmp_path / "alloc_crash_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     # Initial state: insert 10 keys so tree and pages are established
@@ -42,7 +42,7 @@ def test_crash_after_page_allocation_reclaims_orphaned_pages_on_reopen(tmp_path)
         pass
 
     # Inspect the file before recovery: orphaned pages physically exist on disk
-    with open(db_path / "objectdb.data", "rb") as fp:
+    with open(db_path / "embeddeddb.data", "rb") as fp:
         fp.seek(0, 2)
         crashed_page_count = fp.tell() // PAGE_SIZE
 
@@ -51,7 +51,7 @@ def test_crash_after_page_allocation_reclaims_orphaned_pages_on_reopen(tmp_path)
     )
 
     # Reopen database: startup recovery must physically reclaim the 3 orphaned pages
-    reopened_db = ObjectDB(db_path)
+    reopened_db = EmbeddedDB(db_path)
     reopened_db.open()
 
     try:
@@ -82,7 +82,7 @@ def test_crash_during_page_allocation_before_file_write(tmp_path):
     tolerates the missing page without crashing.
     """
     db_path = tmp_path / "alloc_prewrite_crash_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"val1")
 
@@ -97,7 +97,7 @@ def test_crash_during_page_allocation_before_file_write(tmp_path):
     db.simulate_crash()
 
     # Reopen: recovery should see PAGE_ALLOCATED for page that was never written
-    reopened_db = ObjectDB(db_path)
+    reopened_db = EmbeddedDB(db_path)
     reopened_db.open()
 
     try:
@@ -114,7 +114,7 @@ def test_repeated_recovery_with_reclaimed_pages_is_idempotent(tmp_path):
     does not error and leaves page allocation and metadata consistent.
     """
     db_path = tmp_path / "repeated_rec_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"v1")
 
@@ -131,13 +131,13 @@ def test_repeated_recovery_with_reclaimed_pages_is_idempotent(tmp_path):
         pass
 
     # First recovery
-    db1 = ObjectDB(db_path)
+    db1 = EmbeddedDB(db_path)
     db1.open()
     assert db1.page_manager.page_count == base_page_count
     db1.close()
 
     # Second recovery (simulating restart or repeated recovery)
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     db2.open()
     try:
         assert db2.page_manager.page_count == base_page_count
@@ -153,7 +153,7 @@ def test_transaction_rollback_reclaims_allocated_pages(tmp_path):
     the newly allocated pages are physically reclaimed from disk.
     """
     db_path = tmp_path / "rollback_alloc_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"hello")
 

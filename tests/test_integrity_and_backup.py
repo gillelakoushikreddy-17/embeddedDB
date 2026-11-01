@@ -1,12 +1,12 @@
 import pytest
-from objectdb import ObjectDB
-from objectdb.page_manager import PAGE_SIZE
+from embeddeddb import EmbeddedDB
+from embeddeddb.page_manager import PAGE_SIZE
 
 
 def test_integrity_check_on_empty_and_populated_db(tmp_path):
     """Integrity check passes on both freshly initialized and populated databases."""
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     # Empty database
@@ -31,14 +31,14 @@ def test_integrity_check_on_empty_and_populated_db(tmp_path):
 def test_integrity_check_detects_corrupted_key_ordering(tmp_path):
     """Integrity check detects an out-of-order key inside a leaf page."""
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     for i in range(10):
         db.put(i, f"val_{i}".encode("ascii"))
 
     root_page_id = db.tree.root_page_id
-    from objectdb.btree import decode_leaf_node, LEAF_HEADER_FORMAT, LEAF_NODE_TYPE, KEY_FORMAT, RECORD_SIZE, KEY_SIZE, LEAF_HEADER_SIZE
+    from embeddeddb.btree import decode_leaf_node, LEAF_HEADER_FORMAT, LEAF_NODE_TYPE, KEY_FORMAT, RECORD_SIZE, KEY_SIZE, LEAF_HEADER_SIZE
     import struct
 
     keys, records = decode_leaf_node(db.page_manager.read_page(root_page_id))
@@ -72,7 +72,7 @@ def test_backup_creates_consistent_independent_copy(tmp_path):
     db_path = tmp_path / "source_db"
     backup_path = tmp_path / "backup_db"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     for i in range(50):
@@ -83,16 +83,16 @@ def test_backup_creates_consistent_independent_copy(tmp_path):
     assert res == backup_path
 
     # Verify backup files exist
-    assert (backup_path / "objectdb.data").exists()
+    assert (backup_path / "embeddeddb.data").exists()
     assert (backup_path / "segment-0.dat").exists()
-    assert (backup_path / "objectdb.wal").exists()
+    assert (backup_path / "embeddeddb.wal").exists()
 
     # Modify source db after backup
     db.put(999, b"source_only")
     db.close()
 
     # Open backup db and verify integrity
-    backup_db = ObjectDB(backup_path)
+    backup_db = EmbeddedDB(backup_path)
     backup_db.open()
     try:
         report = backup_db.check_integrity(raise_on_error=True)
@@ -117,7 +117,7 @@ def test_backup_during_active_transaction_rejected(tmp_path):
     db_path = tmp_path / "source_db"
     backup_path = tmp_path / "backup_db"
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     with db.transaction():

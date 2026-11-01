@@ -1,11 +1,11 @@
 import random
 import pytest
-from objectdb import ObjectDB
+from embeddeddb import EmbeddedDB
 
 
 def test_randomized_btree_differential_testing(tmp_path):
     """
-    Deterministic randomized differential test comparing ObjectDB against a
+    Deterministic randomized differential test comparing EmbeddedDB against a
     Python dict reference model over 500+ mutations with periodic restarts and
     integrity audits.
     """
@@ -13,7 +13,7 @@ def test_randomized_btree_differential_testing(tmp_path):
     db_path = tmp_path / "random_db"
     reference = {}
 
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     # Pre-insert special boundary keys
@@ -71,7 +71,7 @@ def test_randomized_btree_differential_testing(tmp_path):
         if op_idx % 150 == 0:
             db.check_integrity(raise_on_error=True)
             db.close()
-            db = ObjectDB(db_path)
+            db = EmbeddedDB(db_path)
             db.open()
 
     # Final deep audit

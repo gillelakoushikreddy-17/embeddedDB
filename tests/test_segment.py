@@ -1,4 +1,4 @@
-from objectdb.segment import Segment
+from embeddeddb.segment import Segment
 import pytest
 def test_segment_read_after_append(tmp_path):
     segment = Segment(tmp_path / "segment_0.dat")
@@ -22,7 +22,7 @@ def test_segment_persistence_after_reopen(tmp_path):
     segment.open()
 
     try:
-        offset, size = segment.append(b"Persistent ObjectDB")
+        offset, size = segment.append(b"Persistent EmbeddedDB")
     finally:
         segment.close()
 
@@ -31,7 +31,7 @@ def test_segment_persistence_after_reopen(tmp_path):
 
     try:
         result = reopened_segment.read(offset, size)
-        assert result == b"Persistent ObjectDB"
+        assert result == b"Persistent EmbeddedDB"
     finally:
         reopened_segment.close()
 

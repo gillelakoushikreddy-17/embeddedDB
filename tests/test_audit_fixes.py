@@ -1,18 +1,18 @@
 import pytest
 import tempfile
-from objectdb import (
-    ObjectDB,
+from embeddeddb import (
+    EmbeddedDB,
     TreeAlreadyExistsError,
     TreeNotFoundError,
 )
-from objectdb.page_manager import PageManager, PAGE_SIZE
-from objectdb.btree import (
+from embeddeddb.page_manager import PageManager, PAGE_SIZE
+from embeddeddb.btree import (
     encode_leaf_node,
     decode_leaf_node,
     encode_internal_node,
     decode_internal_node,
 )
-from objectdb.record import encode_record
+from embeddeddb.record import encode_record
 
 
 def test_named_tree_created_in_transaction_operates_cleanly_in_subsequent_transactions(tmp_path):
@@ -22,7 +22,7 @@ def test_named_tree_created_in_transaction_operates_cleanly_in_subsequent_transa
     can mutate the tree without 'Transaction is already committed' errors.
     """
     db_path = tmp_path / "tree_in_tx_db"
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         with db.transaction():
             t = db.create_tree("tree1")
             t.put(1, b"v1")
@@ -35,7 +35,7 @@ def test_named_tree_created_in_transaction_operates_cleanly_in_subsequent_transa
         assert t.get(2) == b"v2"
 
     # Verify persistence
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         t = db.open_tree("tree1")
         assert t.get(1) == b"v1"
         assert t.get(2) == b"v2"
@@ -48,7 +48,7 @@ def test_named_tree_dropped_in_aborted_transaction_is_fully_functional(tmp_path)
     and its adapter reset so that it can continue to be mutated inside future transactions.
     """
     db_path = tmp_path / "dropped_rollback_db"
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         u = db.create_tree("users")
         u.put(1, b"one")
 
@@ -71,7 +71,7 @@ def test_named_tree_dropped_in_aborted_transaction_is_fully_functional(tmp_path)
         assert u.get(2) == b"two"
 
     # Persistence verification
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         u = db.open_tree("users")
         assert u.get(1) == b"one"
         assert u.get(2) == b"two"
@@ -130,7 +130,7 @@ def test_named_tree_created_in_transaction_operates_outside_transaction(tmp_path
     outside of transactions once committed.
     """
     db_path = tmp_path / "tx_outside_db"
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         with db.transaction():
             t = db.create_tree("tree1")
             t.put(1, b"v1")
@@ -149,7 +149,7 @@ def test_named_tree_dropped_in_committed_transaction_raises_tree_not_found(tmp_p
     on subsequent operations rather than leaking dead transaction handles.
     """
     db_path = tmp_path / "tx_drop_commit_db"
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         t = db.create_tree("tree1")
         t.put(1, b"v1")
 
@@ -175,7 +175,7 @@ def test_drop_and_recreate_tree_in_same_transaction(tmp_path):
     in the same transaction commits cleanly.
     """
     db_path = tmp_path / "tx_drop_recreate_db"
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         t1 = db.create_tree("mytree")
         t1.put(10, b"old_data")
 
@@ -187,7 +187,7 @@ def test_drop_and_recreate_tree_in_same_transaction(tmp_path):
         assert t2.get(10) is None
         assert t2.get(20) == b"new_data"
 
-    with ObjectDB(db_path) as db:
+    with EmbeddedDB(db_path) as db:
         t = db.open_tree("mytree")
         assert t.get(10) is None
         assert t.get(20) == b"new_data"
@@ -198,7 +198,7 @@ def test_decode_leaf_and_internal_node_rejects_malformed_order():
     Verify that decoding a page with duplicate or descending keys raises ValueError.
     """
     import struct
-    from objectdb.btree import (
+    from embeddeddb.btree import (
         LEAF_NODE_TYPE,
         LEAF_HEADER_FORMAT,
         INTERNAL_NODE_TYPE,

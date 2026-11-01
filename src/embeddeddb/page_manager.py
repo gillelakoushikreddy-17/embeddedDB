@@ -1,7 +1,7 @@
 
 from pathlib import Path
 import os
-from objectdb.header import read_header, create_header, NO_ROOT_PAGE
+from embeddeddb.header import read_header, create_header, NO_ROOT_PAGE
 PAGE_SIZE = 4096
 
 
@@ -78,7 +78,7 @@ class PageManager:
         self.file.flush()
 
     def initialize(self):
-        from objectdb.header import create_header
+        from embeddeddb.header import create_header
 
         page_zero = create_header().ljust(PAGE_SIZE, b"\x00")
 

@@ -2,7 +2,7 @@
 import base64
 import binascii
 
-from objectdb.page_manager import PAGE_SIZE
+from embeddeddb.page_manager import PAGE_SIZE
 
 
 class RecoveryManager:

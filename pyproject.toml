@@ -4,14 +4,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "objectdb"
+name = "embeddeddb"
 version = "0.1.0"
 description = "A reliable embedded key-value database engine for object storage backends"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "ObjectDB Developers" }
+    { name = "EmbeddedDB Developers" }
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

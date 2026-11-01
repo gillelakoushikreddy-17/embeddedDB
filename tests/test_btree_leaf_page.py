@@ -1,9 +1,9 @@
-from objectdb.btree import (
+from embeddeddb.btree import (
     encode_leaf_node,
     decode_leaf_node,
     PAGE_SIZE,
 )
-from objectdb.record import encode_record
+from embeddeddb.record import encode_record
 
 
 def test_leaf_node_round_trip():
@@ -24,7 +24,7 @@ def test_leaf_node_round_trip():
     assert decoded_records == records
 
 
-from objectdb.page_manager import PageManager
+from embeddeddb.page_manager import PageManager
 
 
 def test_write_leaf_node_to_disk(tmp_path):

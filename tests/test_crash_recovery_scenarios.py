@@ -1,22 +1,22 @@
 import pytest
-from objectdb import ObjectDB
-from objectdb.header import read_header
-from objectdb.page_manager import PAGE_SIZE, PageManager
-from objectdb.wal import WriteAheadLog
-from objectdb.transaction import Transaction, TransactionPageAdapter
-from objectdb.transactional_page_writer import TransactionalPageWriter
-from objectdb.recovery import RecoveryManager
+from embeddeddb import EmbeddedDB
+from embeddeddb.header import read_header
+from embeddeddb.page_manager import PAGE_SIZE, PageManager
+from embeddeddb.wal import WriteAheadLog
+from embeddeddb.transaction import Transaction, TransactionPageAdapter
+from embeddeddb.transactional_page_writer import TransactionalPageWriter
+from embeddeddb.recovery import RecoveryManager
 
 
 def test_reopen_after_committed_transaction(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(42, b"answer")
     db.close()
 
     # Reopen
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     db2.open()
     try:
         assert db2.get(42) == b"answer"
@@ -26,7 +26,7 @@ def test_reopen_after_committed_transaction(tmp_path):
 
 def test_startup_recovery_undoes_uncommitted_put(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"committed_data")
 
@@ -37,7 +37,7 @@ def test_startup_recovery_undoes_uncommitted_put(tmp_path):
     db.tree.page_manager = adapter
     try:
         offset, size = db.segment.append(b"uncommitted_data")
-        from objectdb.record import encode_record
+        from embeddeddb.record import encode_record
         db.tree.insert_into_root(2, encode_record(0, offset, size))
     finally:
         db.tree.page_manager = old_adapter
@@ -49,7 +49,7 @@ def test_startup_recovery_undoes_uncommitted_put(tmp_path):
     db.is_open = False
 
     # Reopen database - recovery should run automatically
-    recovered_db = ObjectDB(db_path)
+    recovered_db = EmbeddedDB(db_path)
     recovered_db.open()
     try:
         assert recovered_db.get(1) == b"committed_data"
@@ -60,7 +60,7 @@ def test_startup_recovery_undoes_uncommitted_put(tmp_path):
 
 def test_startup_recovery_undoes_uncommitted_delete(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"keep_me")
 
@@ -81,7 +81,7 @@ def test_startup_recovery_undoes_uncommitted_delete(tmp_path):
     db.is_open = False
 
     # Reopen - startup recovery should restore deleted key
-    recovered_db = ObjectDB(db_path)
+    recovered_db = EmbeddedDB(db_path)
     recovered_db.open()
     try:
         assert recovered_db.get(1) == b"keep_me"
@@ -92,7 +92,7 @@ def test_startup_recovery_undoes_uncommitted_delete(tmp_path):
 def test_startup_recovery_after_interrupted_tree_split(tmp_path):
     """Simulate a crash during a root split before the transaction commits."""
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     # Fill root leaf close to capacity
@@ -110,7 +110,7 @@ def test_startup_recovery_after_interrupted_tree_split(tmp_path):
     db.tree.page_manager = adapter
     try:
         offset, size = db.segment.append(b"split_trigger")
-        from objectdb.record import encode_record
+        from embeddeddb.record import encode_record
         db.tree.insert_into_root(capacity + 5, encode_record(0, offset, size))
     finally:
         db.tree.page_manager = old_adapter
@@ -126,7 +126,7 @@ def test_startup_recovery_after_interrupted_tree_split(tmp_path):
     db.is_open = False
 
     # Reopen database - recovery must restore root page ID and all pages
-    recovered_db = ObjectDB(db_path)
+    recovered_db = EmbeddedDB(db_path)
     recovered_db.open()
     try:
         header_recovered = read_header(recovered_db.page_manager.read_page(0))
@@ -145,19 +145,19 @@ def test_startup_recovery_after_interrupted_tree_split(tmp_path):
 
 def test_startup_recovery_handles_truncated_final_wal_record(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"first")
     db.put(2, b"second")
     db.close()
 
     # Simulate an incomplete/truncated record written right at crash time
-    wal_file = db_path / "objectdb.wal"
+    wal_file = db_path / "embeddeddb.wal"
     with open(wal_file, "ab") as f:
         f.write(b'{"lsn":99,"type":"PAGE_BEFORE_IMAGE","data":{"trans')
 
     # Reopen should discard the incomplete final record and open cleanly
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     db2.open()
     try:
         assert db2.get(1) == b"first"
@@ -220,13 +220,13 @@ def test_recovered_transaction_does_not_undo_subsequent_committed_transactions_o
     db_path = tmp_path / "multi_session_recovery_db"
 
     # Session 1: Commit initial value
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"session1_val")
     db.close()
 
     # Session 2: Start transaction, write dirty value, simulate ungraceful crash
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     try:
         with db.transaction():
@@ -237,7 +237,7 @@ def test_recovered_transaction_does_not_undo_subsequent_committed_transactions_o
         pass
 
     # Session 3: Reopen database. Startup recovery rolls back dirty value to session1_val
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     assert db.get(1) == b"session1_val"
 
@@ -247,7 +247,7 @@ def test_recovered_transaction_does_not_undo_subsequent_committed_transactions_o
     db.close()
 
     # Session 4: Reopen database. Recovery MUST NOT re-undo session 3's committed write!
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     try:
         assert db.get(1) == b"session3_committed_val"

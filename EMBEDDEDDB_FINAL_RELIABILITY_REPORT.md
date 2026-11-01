@@ -1,8 +1,8 @@
-# ObjectDB Final Reliability & Comprehensive Bug Audit Report
+# EmbeddedDB Final Reliability & Comprehensive Bug Audit Report
 
 **Date**: October 26, 2026  
 **Auditor**: Senior Database Engine & Software Reliability Engineer  
-**Target Repository**: `ObjectDB` (Embedded Key-Value Database Engine)  
+**Target Repository**: `EmbeddedDB` (Embedded Key-Value Database Engine)  
 **Git Commit / Tag**: `729418a` / `v0.1.0-complete-audit-verified`  
 **Test Suite Summary**: **234 passed** in **20.40s** (100% pass rate)
 
@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-A comprehensive architectural, correctness, durability, performance, and failure-injection audit of the **ObjectDB** embedded database engine has been completed.
+A comprehensive architectural, correctness, durability, performance, and failure-injection audit of the **EmbeddedDB** embedded database engine has been completed.
 
 The codebase was audited to eliminate silent data corruption vectors, incomplete transaction rollbacks, file descriptor leaks, unsafe backup staging replacements, and algorithmic bottlenecks during tree rebalancing. Across multiple iterative audit cycles, **10 distinct defects** across core subsystems (WAL, Recovery, Page Management, B+ Tree, Segment Storage, and Database Lifecycle) were diagnosed, reproduced with targeted regression tests, corrected, and verified.
 
@@ -24,10 +24,10 @@ The test suite was expanded from **144 tests** to **234 automated tests** (+90 t
 |---|---|---|---|---|---|---|
 | **1** | `database.py` | **Backup Replacement Data Loss Risk** | **High** | `Fixed and verified` | Staging replacement deleted existing backup before rename completed. Fixed by moving existing backup to `.old_backup_{uuid}` temporary directory and reverting if rename fails. | `tests/test_backup_consistency.py`<br>`tests/test_integrity_and_backup.py` |
 | **2** | `page_manager.py`<br>`recovery.py`<br>`transaction.py` | **Unreclaimed Page Allocations on Crash / Abort** | **High** | `Fixed and verified` | Recovery and transaction abort tracked allocated pages but did not physically reclaim them, leading to file fragmentation and unbounded growth. Fixed by adding `reclaim_allocated_pages()` to `PageManager`, truncating uncommitted allocated pages. | `tests/test_page_allocation_recovery.py`<br>`tests/test_transaction_integration.py` |
-| **3** | `database.py`<br>`recovery.py` | **Multi-Session Recovery Undo Replay Defect** | **Critical** | `Fixed and verified` | Incomplete transactions undone during recovery were not marked as `ROLLBACK` in the WAL. On subsequent session open, recovery re-ran on the old uncommitted transaction, destroying newer committed updates! Fixed by writing durable `ROLLBACK` records in `ObjectDB.open()`. | `tests/test_crash_recovery_scenarios.py::test_recovered_transaction_does_not_undo_subsequent_committed_transactions_on_next_reopen` |
+| **3** | `database.py`<br>`recovery.py` | **Multi-Session Recovery Undo Replay Defect** | **Critical** | `Fixed and verified` | Incomplete transactions undone during recovery were not marked as `ROLLBACK` in the WAL. On subsequent session open, recovery re-ran on the old uncommitted transaction, destroying newer committed updates! Fixed by writing durable `ROLLBACK` records in `EmbeddedDB.open()`. | `tests/test_crash_recovery_scenarios.py::test_recovered_transaction_does_not_undo_subsequent_committed_transactions_on_next_reopen` |
 | **4** | `btree.py`<br>`persistent_btree.py` | **B+ Tree Split & Rebalance CPU Bottleneck** | **Medium** | `Fixed and verified` | Internal node encoding and decoding called per-item `struct.unpack_from` and linear `sorted(zip(...))` scans millions of times. Replaced with vectorized struct unpacking (`f"<{key_count}q"`) and `bisect` binary search, speeding up split tests by ~40%. | `tests/test_persistent_btree.py::test_large_tree_internal_splits`<br>`tests/test_internal_rebalancing.py` |
 | **5** | `segment.py` | **Segment Read Beyond EOF & Handle Leaks** | **Medium** | `Fixed and verified` | Zero-byte reads at or beyond EOF bypassed offset validation. Multiple `open()` calls leaked file handles. Fixed with strict offset bounds check (`offset > file_size or offset + size > file_size`) and idempotent `open()`. | `tests/test_segment.py::test_segment_read_zero_size_beyond_end_rejected`<br>`tests/test_segment.py::test_segment_idempotent_open` |
-| **6** | `database.py` | **Database Lifecycle Cleanup on Initialization Failure** | **High** | `Fixed and verified` | If database opening failed during recovery or initialization, file locks and in-process registry entries remained acquired. Fixed by wrapping `ObjectDB.open()` in strict `try...except` block with complete cleanup. | `tests/test_initialization_cleanup.py` (8 tests) |
+| **6** | `database.py` | **Database Lifecycle Cleanup on Initialization Failure** | **High** | `Fixed and verified` | If database opening failed during recovery or initialization, file locks and in-process registry entries remained acquired. Fixed by wrapping `EmbeddedDB.open()` in strict `try...except` block with complete cleanup. | `tests/test_initialization_cleanup.py` (8 tests) |
 | **7** | `database.py` | **Cross-Process Concurrency File Locking** | **High** | `Fixed and verified` | Multiple OS processes could open the same database directory concurrently, causing corruption. Implemented OS-level non-blocking `fcntl.flock(LOCK_EX | LOCK_NB)` file lock file (`.lock`). | `tests/test_concurrency_lock.py` (5 multiprocessing tests) |
 | **8** | `wal.py`<br>`database.py` | **WAL Durability Failures & Fail-Closed Poisoning** | **Critical** | `Fixed and verified` | If WAL disk write, flush, or fsync failed, in-memory state became inconsistent with on-disk state. Implemented fail-closed poisoning (`is_poisoned` flag) blocking subsequent reads/writes until clean reopen and recovery. | `tests/test_wal_durability_failures.py` (6 tests) |
 | **9** | `database.py`<br>`persistent_btree.py` | **Integer Key Boundary & Overflow Validation** | **Medium** | `Fixed and verified` | B+ tree nodes serialize 64-bit signed integers. Unbounded Python integers overflowed `struct.pack("<q")`. Fixed with strict boundary checks `MIN_KEY <= key <= MAX_KEY` across all public API methods. | `tests/test_adversarial_durability.py::test_64bit_integer_key_boundaries_and_rejection` |
@@ -76,7 +76,7 @@ The test suite was expanded from **144 tests** to **234 automated tests** (+90 t
   3. Session 3 opens the database. Startup recovery runs: it reads the WAL, detects Session 2 was uncommitted, restores the before-image for page containing key 1 back to `v1`. Session 3 then writes key 1 (`v3`) and commits cleanly!
   4. Session 4 opens the database. Startup recovery reads the WAL again. Because Session 2 was never marked as rolled back in the log, **Session 4's recovery sees Session 2 as still uncommitted and re-applies Session 2's old before-image, overwriting Session 3's committed update `v3`!**
 - **Solution**:
-  In `ObjectDB.open()`, immediately after `recovery.recover()` finishes undoing incomplete transactions, append a durable `ROLLBACK` record to the WAL for every recovered transaction:
+  In `EmbeddedDB.open()`, immediately after `recovery.recover()` finishes undoing incomplete transactions, append a durable `ROLLBACK` record to the WAL for every recovered transaction:
   ```python
   rec_result = recovery.recover(page_writer)
   for tx_id in rec_result.get("recovered_transactions", []):
@@ -89,13 +89,13 @@ The test suite was expanded from **144 tests** to **234 automated tests** (+90 t
 ### 3.4. Defect #4: B+ Tree Performance & Struct Vectorization
 - **Problem**: The diagnostic test `test_large_tree_internal_splits` and full test runs were bottlenecked. Profiling showed that internal node encoding/decoding performed millions of individual `struct.unpack_from("<q")` and `struct.unpack_from("<Q")` calls, alongside linear `sorted(zip(keys, child_page_ids))` operations.
 - **Solution**:
-  1. Vectorized encoding/decoding in `src/objectdb/btree.py`:
+  1. Vectorized encoding/decoding in `src/embeddeddb/btree.py`:
      ```python
      # Vectorized unpack of all keys and pointers in a single C-level call:
      keys = list(struct.unpack_from(f"<{key_count}q", data, offset))
      child_page_ids = list(struct.unpack_from(f"<{key_count + 1}Q", data, offset))
      ```
-  2. Replaced linear scans in `src/objectdb/persistent_btree.py` (`_find_leaf_page`, `search`, `delete`, `insert_into_root`) with `bisect.bisect_right()` and `bisect.bisect_left()`.
+  2. Replaced linear scans in `src/embeddeddb/persistent_btree.py` (`_find_leaf_page`, `search`, `delete`, `insert_into_root`) with `bisect.bisect_right()` and `bisect.bisect_left()`.
 - **Results**:
   - `test_large_tree_internal_splits` runtime reduced from **7.48s** to **4.51s** (~40% faster).
   - Total test suite execution time reduced from >120s timeout to **20.40s**.
@@ -120,7 +120,7 @@ The test suite was expanded from **144 tests** to **234 automated tests** (+90 t
 ```
 ============================= test session starts ==============================
 platform darwin -- Python 3.13.16, pytest-9.1.1, pluggy-1.7.0
-rootdir: /Users/g.saikrishnareddy/Projects/objectdb
+rootdir: /Users/g.saikrishnareddy/Projects/embeddeddb
 configfile: pyproject.toml
 collected 234 items
 
@@ -138,9 +138,9 @@ tests/test_durability_ordering.py .....                                  [ 19%]
 tests/test_initialization_cleanup.py ........                            [ 22%]
 tests/test_integrity_and_backup.py ....                                  [ 24%]
 tests/test_internal_rebalancing.py ....                                  [ 26%]
-tests/test_objectdb_api.py .....                                         [ 28%]
-tests/test_objectdb_persistence.py ...                                   [ 29%]
-tests/test_objectdb_startup_recovery.py .                                [ 29%]
+tests/test_embeddeddb_api.py .....                                         [ 28%]
+tests/test_embeddeddb_persistence.py ...                                   [ 29%]
+tests/test_embeddeddb_startup_recovery.py .                                [ 29%]
 tests/test_page_allocation_recovery.py ....                              [ 31%]
 tests/test_page_manager.py .........                                     [ 35%]
 tests/test_page_storage.py ...                                           [ 36%]
@@ -163,8 +163,8 @@ tests/test_wal_durability_failures.py ......                             [100%]
 ```
 
 ### Clean Environment Smoke Test Evidence
-A completely isolated virtual environment `/tmp/test_objdb_venv` was created outside the project tree. The built wheel `objectdb-0.1.0-py3-none-any.whl` was installed and verified:
-- `import objectdb; from objectdb import ObjectDB`
+A completely isolated virtual environment `/tmp/test_objdb_venv` was created outside the project tree. The built wheel `embeddeddb-0.1.0-py3-none-any.whl` was installed and verified:
+- `import embeddeddb; from embeddeddb import EmbeddedDB`
 - Database creation, read, write, update, delete
 - Transaction rollback and multi-mutation isolation
 - Crash recovery and page reclamation verification
@@ -184,11 +184,11 @@ A completely isolated virtual environment `/tmp/test_objdb_venv` was created out
 
 ### Known Limitations & Integration Guidance
 1. **Key Space (Signed 64-bit Integer Keys)**:
-   - *Limitation*: ObjectDB keys are 64-bit signed integers (`[-2^63, 2^63-1]`). S3 object keys are strings (e.g. `photos/2026/img_001.jpg`).
+   - *Limitation*: EmbeddedDB keys are 64-bit signed integers (`[-2^63, 2^63-1]`). S3 object keys are strings (e.g. `photos/2026/img_001.jpg`).
    - *Integration Guidance*: The object storage service should use an internal 64-bit sequence/ID generator (or 64-bit MurmurHash/SipHash) as the primary index key, and store the full string key, bucket name, metadata dict, and ETag inside the serialized byte value stored in the segment file.
 2. **Single Writer Embedded Concurrency**:
-   - *Limitation*: ObjectDB is designed as a single-process embedded engine. Multiple concurrent OS processes cannot write to the same database directory simultaneously.
-   - *Integration Guidance*: In a distributed or multi-worker S3 service, each storage node should host its own ObjectDB instance, or access should be mediated via an RPC service (e.g., gRPC / FastAPI worker) that serializes write transactions across workers.
+   - *Limitation*: EmbeddedDB is designed as a single-process embedded engine. Multiple concurrent OS processes cannot write to the same database directory simultaneously.
+   - *Integration Guidance*: In a distributed or multi-worker S3 service, each storage node should host its own EmbeddedDB instance, or access should be mediated via an RPC service (e.g., gRPC / FastAPI worker) that serializes write transactions across workers.
 3. **Append-Only Segment Storage**:
    - *Limitation*: When values are overwritten or deleted, the old record in the `.data` segment file is unreferenced but not immediately compacted.
    - *Integration Guidance*: For workloads with high deletion rates, an offline compaction / vacuum routine or scheduled backup-and-restore cycle will be required to reclaim unreferenced segment space.
@@ -197,4 +197,4 @@ A completely isolated virtual environment `/tmp/test_objdb_venv` was created out
 
 ## 6. Audit Conclusion & Sign-Off
 
-All identified reliability, performance, recovery, and backup issues in ObjectDB have been resolved and verified with automated test suites. The package is built and verified clean. ObjectDB is dependable and ready for integration into the object storage service development phase.
+All identified reliability, performance, recovery, and backup issues in EmbeddedDB have been resolved and verified with automated test suites. The package is built and verified clean. EmbeddedDB is dependable and ready for integration into the object storage service development phase.

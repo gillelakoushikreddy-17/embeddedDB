@@ -1,5 +1,5 @@
 """
-Persistent Tree Catalog for ObjectDB.
+Persistent Tree Catalog for EmbeddedDB.
 
 Manages the mapping of unique tree names to their corresponding B+ tree root page IDs.
 The catalog is stored across one or more 4096-byte database pages linked via next_page_id.
@@ -13,7 +13,7 @@ import struct
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from objectdb.page_manager import PageManager
+    from embeddeddb.page_manager import PageManager
 
 CATALOG_PAGE_TYPE = 0x03
 PAGE_SIZE = 4096

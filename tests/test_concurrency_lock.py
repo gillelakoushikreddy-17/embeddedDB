@@ -2,15 +2,15 @@ import multiprocessing
 import os
 import sys
 import pytest
-from objectdb import ObjectDB
+from embeddeddb import EmbeddedDB
 
 mp_ctx = multiprocessing.get_context("spawn")
 
 
 def _worker_try_open(db_path_str, result_queue):
-    """Attempt to open an ObjectDB instance in a separate spawned process."""
+    """Attempt to open an EmbeddedDB instance in a separate spawned process."""
     try:
-        db = ObjectDB(db_path_str)
+        db = EmbeddedDB(db_path_str)
         db.open()
         result_queue.put("SUCCESS")
         db.close()
@@ -21,7 +21,7 @@ def _worker_try_open(db_path_str, result_queue):
 def _worker_hold_lock(db_path_str, started_event, release_event, result_queue):
     """Open database, signal started_event, wait for release_event, then close."""
     try:
-        db = ObjectDB(db_path_str)
+        db = EmbeddedDB(db_path_str)
         db.open()
         started_event.set()
         if not release_event.wait(timeout=10):
@@ -35,7 +35,7 @@ def _worker_hold_lock(db_path_str, started_event, release_event, result_queue):
 
 def _worker_open_and_hold(db_path_str, started_event):
     """Open database, signal started_event, and loop until terminated."""
-    db = ObjectDB(db_path_str)
+    db = EmbeddedDB(db_path_str)
     db.open()
     started_event.set()
     import time
@@ -46,10 +46,10 @@ def _worker_open_and_hold(db_path_str, started_event):
 def test_concurrent_open_in_same_process_raises_error(tmp_path):
     """Opening the same database directory twice in one process raises RuntimeError."""
     db_path = tmp_path / "test_db_same_proc"
-    db1 = ObjectDB(db_path)
+    db1 = EmbeddedDB(db_path)
     db1.open()
 
-    db2 = ObjectDB(db_path)
+    db2 = EmbeddedDB(db_path)
     with pytest.raises(RuntimeError, match="already open by another instance in this process"):
         db2.open()
 
@@ -66,7 +66,7 @@ def test_second_spawned_process_rejected_while_first_holds_lock(tmp_path):
     database is rejected by OS-level file locking.
     """
     db_path = tmp_path / "test_db_cross_proc"
-    db1 = ObjectDB(db_path)
+    db1 = EmbeddedDB(db_path)
     db1.open()
 
     queue = mp_ctx.Queue()
@@ -162,7 +162,7 @@ def test_lock_released_when_owning_process_terminates(tmp_path):
             proc.join(timeout=2)
 
     # Parent process can now open the database
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     assert db.is_open is True
     db.close()
@@ -171,10 +171,10 @@ def test_lock_released_when_owning_process_terminates(tmp_path):
 def test_initialization_failure_does_not_leave_stale_lock(tmp_path):
     """If database opening fails during initialization, no stale lock is left for other processes."""
     from unittest.mock import patch
-    from objectdb.recovery import RecoveryManager
+    from embeddeddb.recovery import RecoveryManager
 
     db_path = tmp_path / "test_db_init_fail_lock"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
 
     with patch.object(RecoveryManager, "recover", side_effect=RuntimeError("Recovery failed")):
         with pytest.raises(RuntimeError, match="Recovery failed"):

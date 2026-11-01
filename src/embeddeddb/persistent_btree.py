@@ -2,7 +2,7 @@
 import bisect
 import struct
 
-from objectdb.btree import (
+from embeddeddb.btree import (
     LEAF_NODE_TYPE,
     INTERNAL_NODE_TYPE,
     encode_leaf_node,
@@ -56,7 +56,7 @@ class PersistentBTree:
 
     def load_existing_tree(self):
         page_zero = self.page_manager.read_page(0)
-        from objectdb.header import read_header
+        from embeddeddb.header import read_header
 
         header = read_header(page_zero)
         root_page_id = header["root_page_id"]
@@ -224,7 +224,7 @@ class PersistentBTree:
 
 
     def _leaf_capacity(self):
-        from objectdb.btree import (
+        from embeddeddb.btree import (
             PAGE_SIZE,
             LEAF_HEADER_SIZE,
             KEY_SIZE,
@@ -236,7 +236,7 @@ class PersistentBTree:
 
 
     def _internal_capacity(self):
-        from objectdb.btree import (
+        from embeddeddb.btree import (
             PAGE_SIZE,
             INTERNAL_HEADER_SIZE,
             KEY_SIZE,
@@ -1000,7 +1000,7 @@ class PersistentBTree:
             right_page_id,
         ]
 
-        from objectdb.btree import (
+        from embeddeddb.btree import (
             PAGE_SIZE,
             INTERNAL_HEADER_SIZE,
             KEY_SIZE,

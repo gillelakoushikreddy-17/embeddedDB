@@ -1,5 +1,5 @@
 
-from objectdb.header import (
+from embeddeddb.header import (
     create_header,
     read_header,
     HEADER_SIZE,

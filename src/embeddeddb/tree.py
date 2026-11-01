@@ -1,17 +1,17 @@
 """
-Tree handle and page adapters for named B+ trees in ObjectDB.
+Tree handle and page adapters for named B+ trees in EmbeddedDB.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from objectdb.record import decode_record, encode_record
-from objectdb.transaction import TransactionState
+from embeddeddb.record import decode_record, encode_record
+from embeddeddb.transaction import TransactionState
 
 if TYPE_CHECKING:
-    from objectdb.database import ObjectDB
-    from objectdb.persistent_btree import PersistentBTree
+    from embeddeddb.database import EmbeddedDB
+    from embeddeddb.persistent_btree import PersistentBTree
 
 MIN_KEY = -9223372036854775808
 MAX_KEY = 9223372036854775807
@@ -29,7 +29,7 @@ def _validate_key(key: int) -> None:
 class NamedTreePageAdapter:
     """Page manager adapter for a named tree outside an explicit transaction."""
 
-    def __init__(self, db: ObjectDB, tree_name: str):
+    def __init__(self, db: EmbeddedDB, tree_name: str):
         self.db = db
         self.tree_name = tree_name
 
@@ -106,10 +106,10 @@ class NamedTreeTransactionPageAdapter:
 
 class Tree:
     """
-    Handle for an independent, persistent named B+ tree inside an ObjectDB database.
+    Handle for an independent, persistent named B+ tree inside an EmbeddedDB database.
     """
 
-    def __init__(self, name: str, db: ObjectDB, btree: PersistentBTree):
+    def __init__(self, name: str, db: EmbeddedDB, btree: PersistentBTree):
         self._name = name
         self.db = db
         self.btree = btree
@@ -125,7 +125,7 @@ class Tree:
     def _ensure_valid(self) -> None:
         self.db._ensure_open()
         if not self.db.catalog.has_tree(self._name):
-            from objectdb.catalog import TreeNotFoundError
+            from embeddeddb.catalog import TreeNotFoundError
             raise TreeNotFoundError(
                 f"Tree '{self._name}' has been dropped or does not exist"
             )

@@ -1,8 +1,8 @@
-from objectdb.page_manager import PageManager, PAGE_SIZE
-from objectdb.wal import WriteAheadLog
-from objectdb.transactional_page_writer import TransactionalPageWriter
-from objectdb.transaction import Transaction
-from objectdb.recovery import RecoveryManager
+from embeddeddb.page_manager import PageManager, PAGE_SIZE
+from embeddeddb.wal import WriteAheadLog
+from embeddeddb.transactional_page_writer import TransactionalPageWriter
+from embeddeddb.transaction import Transaction
+from embeddeddb.recovery import RecoveryManager
 
 
 def test_recovers_uncommitted_page_after_reopening(tmp_path):

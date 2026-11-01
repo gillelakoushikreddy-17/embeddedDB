@@ -1,7 +1,7 @@
 
-from objectdb.page_manager import PageManager
-from objectdb.persistent_btree import PersistentBTree
-from objectdb.btree import (
+from embeddeddb.page_manager import PageManager
+from embeddeddb.persistent_btree import PersistentBTree
+from embeddeddb.btree import (
     LEAF_NODE_TYPE,
     INTERNAL_NODE_TYPE,
     decode_leaf_node,
@@ -98,7 +98,7 @@ def test_root_survives_database_reopen(tmp_path):
 
 
 
-from objectdb.record import encode_record
+from embeddeddb.record import encode_record
 
 
 def test_insert_into_root(tmp_path):
@@ -272,7 +272,7 @@ def test_leaf_page_capacity(tmp_path):
         manager.close()
 
 def test_leaf_split_creates_internal_root(tmp_path):
-    from objectdb.btree import (
+    from embeddeddb.btree import (
         INTERNAL_NODE_TYPE,
         decode_internal_node,
     )
@@ -416,9 +416,9 @@ def test_find_parent_page_after_split(tmp_path):
 
 
 def test_find_leaf_page_with_nested_internal_nodes(tmp_path):
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import (
         encode_leaf_node,
         encode_internal_node,
     )
@@ -491,7 +491,7 @@ def test_find_leaf_page_with_nested_internal_nodes(tmp_path):
 
 
 def test_split_internal_entries():
-    from objectdb.persistent_btree import PersistentBTree
+    from embeddeddb.persistent_btree import PersistentBTree
 
     tree = PersistentBTree(None)
 
@@ -516,9 +516,9 @@ def test_split_internal_entries():
 
 
 def test_write_split_internal_nodes(tmp_path):
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import decode_internal_node
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import decode_internal_node
 
     db_path = tmp_path / "internal_split.db"
 
@@ -555,9 +555,9 @@ def test_write_split_internal_nodes(tmp_path):
 
 
 def test_insert_separator_into_parent(tmp_path):
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import (
         encode_internal_node,
         decode_internal_node,
     )
@@ -600,9 +600,9 @@ def test_insert_separator_into_parent(tmp_path):
 
 
 def test_create_internal_root_after_split(tmp_path):
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import decode_internal_node
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import decode_internal_node
 
     db_path = tmp_path / "test.db"
     manager = PageManager(db_path)
@@ -640,9 +640,9 @@ def test_create_internal_root_after_split(tmp_path):
 
 
 def test_insert_into_parent_splits_root(tmp_path):
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import (
         encode_internal_node,
         decode_internal_node,
     )
@@ -700,9 +700,9 @@ def test_insert_into_parent_splits_root(tmp_path):
 
 
 def test_insert_into_parent_splits_non_root_parent(tmp_path):
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import (
         encode_internal_node,
         decode_internal_node,
     )
@@ -769,9 +769,9 @@ def test_insert_into_parent_splits_non_root_parent(tmp_path):
         manager.close()
 
 def test_recursive_internal_split_creates_new_root(tmp_path):
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import (
         encode_internal_node,
         decode_internal_node,
     )
@@ -859,8 +859,8 @@ def test_recursive_internal_split_creates_new_root(tmp_path):
 
 
 def test_search_after_multiple_leaf_splits(tmp_path):
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
     import struct
     db_path = tmp_path / "test.db"
     manager = PageManager(db_path)
@@ -888,8 +888,8 @@ def test_search_after_multiple_leaf_splits(tmp_path):
 
 def test_persistence_after_multiple_leaf_splits(tmp_path):
     import struct
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
 
     db_path = tmp_path / "test.db"
 
@@ -928,9 +928,9 @@ def test_persistence_after_multiple_leaf_splits(tmp_path):
 
 def test_update_existing_key_after_multiple_splits(tmp_path):
     import struct
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import decode_leaf_node
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import decode_leaf_node
 
     db_path = tmp_path / "test.db"
     manager = PageManager(db_path)
@@ -966,8 +966,8 @@ def test_update_existing_key_after_multiple_splits(tmp_path):
 
 def test_descending_order_insertion(tmp_path):
     import struct
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
 
     db_path = tmp_path / "test.db"
     manager = PageManager(db_path)
@@ -998,8 +998,8 @@ def test_descending_order_insertion(tmp_path):
 def test_random_order_insertion(tmp_path):
     import random
     import struct
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
 
     db_path = tmp_path / "test.db"
     manager = PageManager(db_path)
@@ -1027,9 +1027,9 @@ def test_random_order_insertion(tmp_path):
 def test_leaf_keys_remain_sorted_after_random_insertions(tmp_path):
     import random
     import struct
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import decode_leaf_node, LEAF_NODE_TYPE
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import decode_leaf_node, LEAF_NODE_TYPE
 
     db_path = tmp_path / "test.db"
     manager = PageManager(db_path)
@@ -1064,9 +1064,9 @@ def test_no_duplicate_keys_across_leaf_pages(tmp_path):
     import random
     import struct
 
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import (
         decode_leaf_node,
         decode_internal_node,
         LEAF_NODE_TYPE,
@@ -1129,9 +1129,9 @@ def test_internal_nodes_remain_valid_after_random_insertions(tmp_path):
     import random
     import struct
 
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import (
         decode_internal_node,
         decode_leaf_node,
         INTERNAL_NODE_TYPE,
@@ -1191,9 +1191,9 @@ def test_child_key_ranges_after_random_insertions(tmp_path):
     import random
     import struct
 
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import (
         decode_internal_node,
         decode_leaf_node,
         INTERNAL_NODE_TYPE,
@@ -1265,9 +1265,9 @@ def test_tree_structure_after_reopening(tmp_path):
     import random
     import struct
 
-    from objectdb.page_manager import PageManager
-    from objectdb.persistent_btree import PersistentBTree
-    from objectdb.btree import (
+    from embeddeddb.page_manager import PageManager
+    from embeddeddb.persistent_btree import PersistentBTree
+    from embeddeddb.btree import (
         decode_internal_node,
         decode_leaf_node,
         INTERNAL_NODE_TYPE,
@@ -1693,9 +1693,9 @@ def test_large_tree_internal_splits(tmp_path):
 
 import struct
 
-from objectdb.page_manager import PageManager
-from objectdb.persistent_btree import PersistentBTree
-from objectdb.btree import (
+from embeddeddb.page_manager import PageManager
+from embeddeddb.persistent_btree import PersistentBTree
+from embeddeddb.btree import (
     LEAF_NODE_TYPE,
     INTERNAL_NODE_TYPE,
     decode_leaf_node,

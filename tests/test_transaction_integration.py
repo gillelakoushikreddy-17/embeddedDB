@@ -1,12 +1,12 @@
 import pytest
-from objectdb import ObjectDB
-from objectdb.header import read_header
-from objectdb.page_manager import PAGE_SIZE
+from embeddeddb import EmbeddedDB
+from embeddeddb.header import read_header
+from embeddeddb.page_manager import PAGE_SIZE
 
 
 def test_put_creates_committed_transaction_in_wal(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:
@@ -27,7 +27,7 @@ def test_put_creates_committed_transaction_in_wal(tmp_path):
 
 def test_failed_mutation_rolls_back_pages_and_metadata(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:
@@ -62,7 +62,7 @@ def test_failed_mutation_rolls_back_pages_and_metadata(tmp_path):
 def test_rollback_restores_root_page_after_split(tmp_path):
     """Verify that if a mutation causes a root split and then fails, root page ID reverts."""
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:
@@ -118,7 +118,7 @@ def test_rollback_restores_root_page_after_split(tmp_path):
 
 def test_page_allocation_metadata_remains_consistent_after_rollback(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:
@@ -154,7 +154,7 @@ def test_page_allocation_metadata_remains_consistent_after_rollback(tmp_path):
 
 def test_repeated_writes_to_same_key_in_separate_transactions(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:
@@ -170,7 +170,7 @@ def test_repeated_writes_to_same_key_in_separate_transactions(tmp_path):
         db.close()
 
     # Reopen to confirm final value persists
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     try:
         assert db.get(1) == b"v3"
@@ -180,7 +180,7 @@ def test_repeated_writes_to_same_key_in_separate_transactions(tmp_path):
 
 def test_transaction_isolation_rollback_does_not_affect_committed(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:
@@ -210,7 +210,7 @@ def test_transaction_isolation_rollback_does_not_affect_committed(tmp_path):
 
 def test_explicit_transaction_context_commits_all(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:
@@ -226,7 +226,7 @@ def test_explicit_transaction_context_commits_all(tmp_path):
         db.close()
 
     # Reopen and check
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     try:
         assert db.get(10) == b"batch_1"
@@ -238,7 +238,7 @@ def test_explicit_transaction_context_commits_all(tmp_path):
 
 def test_explicit_transaction_context_rolls_back_all_on_exception(tmp_path):
     db_path = tmp_path / "test_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
 
     try:

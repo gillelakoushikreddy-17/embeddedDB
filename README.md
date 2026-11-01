@@ -1,21 +1,21 @@
-# ObjectDB
+# EmbeddedDB
 
-**ObjectDB** is a lightweight, reliable, single-process embedded key-value database engine written in Python. It is designed to store metadata and record references, serving as the metadata storage engine for custom storage backends such as S3-like object storage services.
+**EmbeddedDB** is a lightweight, reliable, single-process embedded key-value database engine written in Python. It is designed to store metadata and record references, serving as the metadata storage engine for custom storage backends such as S3-like object storage services.
 
 ---
 
 ## Architecture Overview
 
-ObjectDB separates index structure from payload storage:
+EmbeddedDB separates index structure from payload storage:
 
 - **B+ Tree Index (`PersistentBTree` & `Tree`)**: Maintains persistent, ordered indexes of 64-bit integer keys mapped to fixed-size record pointers (`(segment_id, offset, size)`). Supports multiple named trees alongside the default tree, root splits, internal node splits, leaf borrowing, merging, and tree rebalancing.
 - **Tree Catalog (`TreeCatalog`)**: Maintains a persistent, crash-safe catalog mapping tree names to root page IDs across chained catalog pages, allowing any number of named trees without arbitrary limits.
-- **Page Manager (`PageManager`)**: Allocates, reads, and writes fixed-size 4096-byte database pages (`objectdb.data`). Page 0 is reserved for header metadata (including magic number, format version, page size, default root page ID, and catalog root page ID).
+- **Page Manager (`PageManager`)**: Allocates, reads, and writes fixed-size 4096-byte database pages (`embeddeddb.data`). Page 0 is reserved for header metadata (including magic number, format version, page size, default root page ID, and catalog root page ID).
 - **Segment Storage (`Segment`)**: Append-only log file (`segment-0.dat`) storing arbitrary byte payloads shared across all trees.
-- **Write-Ahead Log (`WriteAheadLog`)**: An append-only journal (`objectdb.wal`) that records operation lifecycle records (`BEGIN`, `PAGE_ALLOCATED`, `PAGE_BEFORE_IMAGE`, `ROOT_PAGE_BEFORE_IMAGE`, `CATALOG_PAGE_BEFORE_IMAGE`, `COMMIT`, `ROLLBACK`) with monotonically increasing Log Sequence Numbers (LSNs).
+- **Write-Ahead Log (`WriteAheadLog`)**: An append-only journal (`embeddeddb.wal`) that records operation lifecycle records (`BEGIN`, `PAGE_ALLOCATED`, `PAGE_BEFORE_IMAGE`, `ROOT_PAGE_BEFORE_IMAGE`, `CATALOG_PAGE_BEFORE_IMAGE`, `COMMIT`, `ROLLBACK`) with monotonically increasing Log Sequence Numbers (LSNs).
 - **Transaction Manager (`Transaction` & `TransactionalPageWriter`)**: Ensures ACID properties for database mutations across all trees using before-image undo logging.
 - **Crash Recovery (`RecoveryManager`)**: Analyzes the WAL upon startup and restores before-images for any uncommitted/interrupted transactions (including tree creation, catalog updates, splits, and page allocations), ensuring the database is always consistent before accepting operations.
-- **Process Concurrency Lock**: Enforces single-process database access using an OS-level file lock (`objectdb.lock`), preventing conflicting writers from corrupting data.
+- **Process Concurrency Lock**: Enforces single-process database access using an OS-level file lock (`embeddeddb.lock`), preventing conflicting writers from corrupting data.
 
 ---
 
@@ -28,15 +28,15 @@ ObjectDB separates index structure from payload storage:
 Build or obtain the distribution wheel and install it into your virtual environment:
 
 ```bash
-pip install path/to/dist/objectdb-0.1.0-py3-none-any.whl
+pip install path/to/dist/embeddeddb-0.1.0-py3-none-any.whl
 ```
 
 ### Installing in Editable / Development Mode
 Clone the repository and install in editable mode:
 
 ```bash
-git clone <repository-url> objectdb
-cd objectdb
+git clone <repository-url> embeddeddb
+cd embeddeddb
 
 # Standard editable install:
 python -m pip install -e .
@@ -56,16 +56,16 @@ python -m pip install -e ".[dev]"
 ### Context Manager (Recommended)
 
 ```python
-from objectdb import ObjectDB
+from embeddeddb import EmbeddedDB
 
 # Open database directory; initializes files on first use
-with ObjectDB("./my_database") as db:
+with EmbeddedDB("./my_database") as db:
     # Insert or update records
-    db.put(100, b"Hello, ObjectDB!")
+    db.put(100, b"Hello, EmbeddedDB!")
 
     # Read records (returns bytes or None if missing)
     value = db.get(100)
-    print(value)  # Output: b"Hello, ObjectDB!"
+    print(value)  # Output: b"Hello, EmbeddedDB!"
 
     # Query missing keys
     missing = db.get(999)
@@ -87,9 +87,9 @@ with ObjectDB("./my_database") as db:
 ### Manual Open / Close
 
 ```python
-from objectdb import ObjectDB
+from embeddeddb import EmbeddedDB
 
-db = ObjectDB("./my_database")
+db = EmbeddedDB("./my_database")
 db.open()
 try:
     db.put(1, b"Payload bytes")
@@ -100,12 +100,12 @@ finally:
 
 ### Multi-Tree Support (Namespaces)
 
-ObjectDB supports multiple independent persistent B+ trees within a single database file. All trees share the underlying page manager, write-ahead log (WAL), and payload segment while maintaining completely isolated keyspaces.
+EmbeddedDB supports multiple independent persistent B+ trees within a single database file. All trees share the underlying page manager, write-ahead log (WAL), and payload segment while maintaining completely isolated keyspaces.
 
 ```python
-from objectdb import ObjectDB, TreeAlreadyExistsError, TreeNotFoundError
+from embeddeddb import EmbeddedDB, TreeAlreadyExistsError, TreeNotFoundError
 
-with ObjectDB("./my_database") as db:
+with EmbeddedDB("./my_database") as db:
     # 1. Create named trees
     users = db.create_tree("users")
     orders = db.create_tree("orders")
@@ -145,7 +145,7 @@ with ObjectDB("./my_database") as db:
 - **Transactions across Multiple Trees**: Named trees participate seamlessly in batch transactions:
 
 ```python
-with ObjectDB("./my_database") as db:
+with EmbeddedDB("./my_database") as db:
     users = db.get_or_create_tree("users")
     logs = db.get_or_create_tree("audit_logs")
 
@@ -161,7 +161,7 @@ with ObjectDB("./my_database") as db:
 
 ### Recovery Model: Before-Image (Undo Logging)
 
-ObjectDB uses a strict before-image undo logging protocol:
+EmbeddedDB uses a strict before-image undo logging protocol:
 
 1. **Transaction Start**: Every mutation begins with a `BEGIN` record logged with a unique transaction ID.
 2. **Page Allocation**: Before new pages are appended to the database file, `PAGE_ALLOCATED` is logged in the WAL.
@@ -175,7 +175,7 @@ ObjectDB uses a strict before-image undo logging protocol:
 Group multiple mutations into a single atomic transaction:
 
 ```python
-with ObjectDB("./my_database") as db:
+with EmbeddedDB("./my_database") as db:
     with db.transaction():
         db.put(1, b"first")
         db.put(2, b"second")
@@ -185,7 +185,7 @@ with ObjectDB("./my_database") as db:
 ### Crash Recovery Guarantees
 
 When opening a database (`db.open()`):
-- ObjectDB scans the WAL to identify committed, rolled-back, and incomplete transactions.
+- EmbeddedDB scans the WAL to identify committed, rolled-back, and incomplete transactions.
 - Any incomplete transaction (a transaction with a `BEGIN` but neither `COMMIT` nor `ROLLBACK`) is automatically undone by restoring its before-images in reverse WAL order.
 - Incomplete tree splits, merges, or page allocations are restored to their consistent pre-transaction state.
 - Incomplete or truncated final WAL records (caused by mid-write power loss or process kill) are safely detected and truncated.
@@ -195,19 +195,19 @@ When opening a database (`db.open()`):
 
 ## Integration with S3-Like Object Storage Backends
 
-ObjectDB is designed to serve as the **metadata engine** for an S3-like object storage service. String keys (bucket names and object keys) are mapped to 64-bit signed integers, and metadata dictionaries are stored as JSON bytes.
+EmbeddedDB is designed to serve as the **metadata engine** for an S3-like object storage service. String keys (bucket names and object keys) are mapped to 64-bit signed integers, and metadata dictionaries are stored as JSON bytes.
 
 ```python
 import hashlib
 import json
 import time
-from objectdb import ObjectDB
+from embeddeddb import EmbeddedDB
 
 class S3MetadataEngine:
-    """S3-compatible metadata store using ObjectDB."""
+    """S3-compatible metadata store using EmbeddedDB."""
     
     def __init__(self, db_path: str):
-        self.db = ObjectDB(db_path)
+        self.db = EmbeddedDB(db_path)
         self.db.open()
 
     def close(self):
@@ -245,16 +245,16 @@ class S3MetadataEngine:
 ```
 
 ### Recommended Object Storage Architecture
-- **ObjectDB (Metadata Store)**: Stores bucket names, object keys, ETags, sizes, MIME types, chunk block maps, and access control policies.
-- **Blob Storage Layer (Payloads)**: Store large multi-megabyte/gigabyte object payload chunks in dedicated chunk files on disk or raw block storage, keeping the ObjectDB metadata index small, fast, and cached in memory.
+- **EmbeddedDB (Metadata Store)**: Stores bucket names, object keys, ETags, sizes, MIME types, chunk block maps, and access control policies.
+- **Blob Storage Layer (Payloads)**: Store large multi-megabyte/gigabyte object payload chunks in dedicated chunk files on disk or raw block storage, keeping the EmbeddedDB metadata index small, fast, and cached in memory.
 
 ---
 
 ## Concurrency, Durability, and Operating System Semantics
 
 ### Single-Process Access & Locking
-- ObjectDB is designed for **single-process** operation with a single active writer.
-- When opening a database, ObjectDB acquires an exclusive file lock on `objectdb.lock` using platform-native locking (`fcntl.flock(LOCK_EX | LOCK_NB)` on POSIX systems, `msvcrt.locking` on Windows).
+- EmbeddedDB is designed for **single-process** operation with a single active writer.
+- When opening a database, EmbeddedDB acquires an exclusive file lock on `embeddeddb.lock` using platform-native locking (`fcntl.flock(LOCK_EX | LOCK_NB)` on POSIX systems, `msvcrt.locking` on Windows).
 - If another process attempts to open the same database directory concurrently, a `RuntimeError` is immediately raised to prevent data corruption.
 
 ### Durability Guarantees
@@ -262,9 +262,9 @@ class S3MetadataEngine:
 - Interrupted or uncommitted transactions never leak partial changes into the database index.
 
 ### Directory Synchronization Semantics
-- ObjectDB ensures directory metadata durability (such as creating files or installing atomic backups) by synchronizing parent directories via `_sync_directory()`.
+- EmbeddedDB ensures directory metadata durability (such as creating files or installing atomic backups) by synchronizing parent directories via `_sync_directory()`.
 - On POSIX platforms (Linux, macOS), directories are opened with `os.O_RDONLY` and synchronized with `os.fsync()`.
-- On platforms or filesystem drivers where directory `fsync()` is not supported (such as Windows, CIFS/SMB, or certain network filesystems that raise `EISDIR`, `EINVAL`, `ENOTSUP`, or `EOPNOTSUPP`), ObjectDB safely detects unsupported directory synchronization while strictly propagating genuine I/O or permission errors.
+- On platforms or filesystem drivers where directory `fsync()` is not supported (such as Windows, CIFS/SMB, or certain network filesystems that raise `EISDIR`, `EINVAL`, `ENOTSUP`, or `EOPNOTSUPP`), EmbeddedDB safely detects unsupported directory synchronization while strictly propagating genuine I/O or permission errors.
 
 ---
 
@@ -282,7 +282,7 @@ Targeted test execution:
 
 ```bash
 # Run API smoke and integration tests
-pytest tests/test_objectdb_api.py -v
+pytest tests/test_embeddeddb_api.py -v
 
 # Run transaction and crash-recovery suites
 pytest tests/test_transaction_integration.py tests/test_crash_recovery_scenarios.py -v
@@ -308,5 +308,5 @@ python -m build
 ```
 
 The resulting distribution archives will be placed in `dist/`:
-- `dist/objectdb-0.1.0-py3-none-any.whl`
-- `dist/objectdb-0.1.0.tar.gz`
+- `dist/embeddeddb-0.1.0-py3-none-any.whl`
+- `dist/embeddeddb-0.1.0.tar.gz`

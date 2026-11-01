@@ -1,8 +1,8 @@
 from unittest.mock import patch
 import pytest
-from objectdb import ObjectDB
-from objectdb.wal import WriteAheadLog
-from objectdb.transaction import TransactionState
+from embeddeddb import EmbeddedDB
+from embeddeddb.wal import WriteAheadLog
+from embeddeddb.transaction import TransactionState
 
 
 def test_wal_append_write_failure_poisons_database_and_recovers_on_reopen(tmp_path):
@@ -11,7 +11,7 @@ def test_wal_append_write_failure_poisons_database_and_recovers_on_reopen(tmp_pa
     the database is poisoned, and reopening restores consistent state.
     """
     db_path = tmp_path / "wal_write_fail_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"val1")
 
@@ -41,7 +41,7 @@ def test_wal_append_write_failure_poisons_database_and_recovers_on_reopen(tmp_pa
     db.close()
 
     # Reopening resets broken/poisoned state and recovers
-    reopened = ObjectDB(db_path)
+    reopened = EmbeddedDB(db_path)
     reopened.open()
     try:
         assert reopened.get(1) == b"val1"
@@ -59,7 +59,7 @@ def test_wal_append_write_failure_poisons_database_and_recovers_on_reopen(tmp_pa
 def test_wal_append_flush_failure_poisons_database(tmp_path):
     """When wal.append fails during flush, the database is poisoned."""
     db_path = tmp_path / "wal_flush_fail_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"val1")
 
@@ -72,7 +72,7 @@ def test_wal_append_flush_failure_poisons_database(tmp_path):
 
     db.close()
 
-    reopened = ObjectDB(db_path)
+    reopened = EmbeddedDB(db_path)
     reopened.open()
     try:
         assert reopened.get(1) == b"val1"
@@ -89,7 +89,7 @@ def test_wal_append_fsync_failure_with_complete_commit_on_disk(tmp_path):
     and recognizes the committed record because it was completely written.
     """
     db_path = tmp_path / "wal_fsync_fail_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"val1")
 
@@ -111,7 +111,7 @@ def test_wal_append_fsync_failure_with_complete_commit_on_disk(tmp_path):
     db.close()
 
     # Reopening parses the valid durable COMMIT record and preserves it
-    reopened = ObjectDB(db_path)
+    reopened = EmbeddedDB(db_path)
     reopened.open()
     try:
         assert reopened.get(1) == b"val1"
@@ -124,17 +124,17 @@ def test_wal_append_fsync_failure_with_complete_commit_on_disk(tmp_path):
 def test_partial_wal_write_detected_and_truncated_on_reopen(tmp_path):
     """An unterminated partial record at the end of WAL is discarded on reopen."""
     db_path = tmp_path / "partial_wal_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"val1")
     db.close()
 
     # Append an incomplete, unterminated line to simulate sudden crash during write
-    wal_file = db_path / "objectdb.wal"
+    wal_file = db_path / "embeddeddb.wal"
     with open(wal_file, "ab") as f:
         f.write(b'{"lsn": 10, "type": "PAGE_BEFORE_IMAGE", "data": {"tra')
 
-    reopened = ObjectDB(db_path)
+    reopened = EmbeddedDB(db_path)
     reopened.open()
     try:
         assert reopened.get(1) == b"val1"
@@ -176,7 +176,7 @@ def test_cleanup_failure_during_wal_append_chains_exception(tmp_path):
 def test_commit_failure_prevents_unsafe_rollback_and_poisons_db(tmp_path):
     """A commit that fails after page sync cannot be rolled back and poisons the DB."""
     db_path = tmp_path / "commit_fail_db"
-    db = ObjectDB(db_path)
+    db = EmbeddedDB(db_path)
     db.open()
     db.put(1, b"val1")
 
@@ -200,7 +200,7 @@ def test_commit_failure_prevents_unsafe_rollback_and_poisons_db(tmp_path):
     db.close()
 
     # Reopening recovers to consistent state
-    reopened = ObjectDB(db_path)
+    reopened = EmbeddedDB(db_path)
     reopened.open()
     try:
         assert reopened.get(1) == b"val1"

@@ -1,4 +1,4 @@
-from objectdb.record import encode_record, decode_record, RECORD_SIZE
+from embeddeddb.record import encode_record, decode_record, RECORD_SIZE
 
 
 def test_encode_and_decode_record():
